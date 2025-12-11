@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Block Creature Evolution Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            overflow: hidden;
+        }
+        
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        
+        .panel {
+            pointer-events: auto;
+            background: rgba(15, 15, 25, 0.92);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(100, 255, 218, 0.2);
+        }
+        
+        #left-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 240px;
+        }
+        
+        #right-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+        }
+        
+        #selected-creature-panel {
+            position: absolute;
+            top: 150px;
+            right: 10px;
+            width: 200px;
+            display: none;
+            border: 2px solid #64ffda;
+        }
+        
+        /* Tournament Leaderboard Panel - shown during tournaments */
+        #tournament-leaderboard {
+            position: absolute;
+            top: 150px;
+            right: 10px;
+            width: 220px;
+            max-height: calc(100vh - 170px);
+            overflow-y: auto;
+            display: none;
+            border: 2px solid #ffd700;
+        }
+        
+        #tournament-leaderboard.active {
+            display: block;
+        }
+        
+        .leaderboard-entry {
+            display: flex;
+            align-items: center;
+            padding: 4px 6px;
+            margin: 2px 0;
+            background: rgba(100, 255, 218, 0.05);
+            border-radius: 4px;
+            font-size: 10px;
+            transition: background 0.2s;
+        }
+        
+        .leaderboard-entry:hover {
+            background: rgba(100, 255, 218, 0.15);
+        }
+        
+        .leaderboard-entry.leader {
+            background: rgba(255, 215, 0, 0.2);
+            border-left: 3px solid #ffd700;
+        }
+        
+        .leaderboard-rank {
+            width: 20px;
+            font-weight: bold;
+            color: #64ffda;
+        }
+        
+        .leaderboard-entry.leader .leaderboard-rank {
+            color: #ffd700;
+        }
+        
+        .leaderboard-name {
+            flex: 1;
+            color: #ccc;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .leaderboard-gen {
+            color: #888;
+            margin-right: 6px;
+            font-size: 9px;
+        }
+        
+        .leaderboard-fitness {
+            color: #4ade80;
+            font-weight: bold;
+            min-width: 45px;
+            text-align: right;
+        }
+        
+        #bottom-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+        
+        h3 {
+            margin-bottom: 6px;
+            color: #64ffda;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 0;
+            font-size: 11px;
+        }
+        
+        .stat-label {
+            color: #888;
+        }
+        
+        .stat-value {
+            color: #64ffda;
+            font-weight: 600;
+        }
+        
+        .stat-value.highlight {
+            color: #ffd700;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            margin: 2px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        button.secondary {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        button.secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: none;
+        }
+        
+        button.active {
+            background: linear-gradient(135deg, #64ffda 0%, #4ade80 100%);
+            color: #1a1a2e;
+        }
+        
+        button.active:hover {
+            box-shadow: 0 4px 12px rgba(100, 255, 218, 0.4);
+        }
+        
+        /* Tournament button - gold theme when enabled */
+        #tournament-btn:not(:disabled) {
+            background: linear-gradient(135deg, #ffd700 0%, #ffaa00 100%);
+            color: #1a1a2e;
+            font-weight: 600;
+            border: 1px solid rgba(255, 215, 0, 0.5);
+        }
+        
+        #tournament-btn:not(:disabled):hover {
+            box-shadow: 0 4px 12px rgba(255, 215, 0, 0.5);
+            transform: translateY(-2px);
+        }
+        
+        input[type="number"] {
+            width: 50px;
+            padding: 3px 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            color: white;
+            font-size: 11px;
+            text-align: center;
+        }
+        
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #64ffda;
+        }
+        
+        select {
+            padding: 3px 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            color: white;
+            font-size: 11px;
+            cursor: pointer;
+            width: 100%;
+        }
+        
+        select:focus {
+            outline: none;
+            border-color: #64ffda;
+        }
+        
+        select option {
+            background: #1a1a2e;
+            color: white;
+        }
+        
+        .mode-selector {
+            margin-top: 6px;
+        }
+        
+        .mode-selector label {
+            display: block;
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 2px;
+        }
+        
+        .mode-description {
+            font-size: 9px;
+            color: #666;
+            margin-top: 2px;
+            font-style: italic;
+        }
+        
+        #progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 6px 0;
+        }
+        
+        #progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #64ffda 0%, #667eea 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .controls-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px;
+            justify-content: center;
+        }
+        
+        .inline-setting {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 4px;
+            font-size: 11px;
+            color: #888;
+        }
+        
+        /* Checkbox styling for settings */
+        .inline-setting input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #64ffda;
+        }
+        
+        .inline-setting input[type="checkbox"]:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        /* Row with two checkboxes side by side */
+        .checkbox-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 4px;
+            font-size: 11px;
+            color: #888;
+        }
+        
+        .checkbox-row label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+        
+        .checkbox-row input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #64ffda;
+        }
+        
+        .checkbox-row input[type="checkbox"]:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        .hint-text {
+            font-size: 9px;
+            color: #666;
+            margin-top: 4px;
+            font-style: italic;
+        }
+        
+        /* Evolution Tree Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-overlay.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: rgba(20, 20, 35, 0.98);
+            border: 1px solid rgba(100, 255, 218, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            overflow-y: auto;
+            color: white;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .modal-header h2 {
+            color: #64ffda;
+            margin: 0;
+            font-size: 18px;
+        }
+        
+        .modal-close {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .modal-close:hover {
+            background: #64ffda;
+            color: #1a1a2e;
+            border-color: #64ffda;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .tree-container {
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 12px;
+        }
+        
+        .tree-node {
+            padding: 6px 0;
+            margin: 2px 0;
+        }
+        
+        .tree-node.current {
+            background: rgba(100, 255, 218, 0.1);
+            border-radius: 4px;
+            padding: 8px;
+        }
+        
+        .legend {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .legend span {
+            margin-right: 12px;
+        }
+        
+        .tree-summary {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 12px;
+            color: #64ffda;
+        }
+        
+        /* Graphical Evolution Tree Canvas Container */
+        #tree-canvas-container {
+            width: 100%;
+            height: 450px;
+            min-height: 350px;
+            background: rgba(20, 20, 35, 0.98);
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #tree-canvas-container canvas {
+            display: block;
+        }
+        
+        .tree-controls {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .tree-controls button {
+            padding: 4px 10px;
+            font-size: 10px;
+        }
+        
+        .tree-stats {
+            margin-top: 8px;
+            padding: 8px;
+            background: rgba(100, 255, 218, 0.05);
+            border-radius: 6px;
+            border: 1px solid rgba(100, 255, 218, 0.2);
+        }
+        
+        .tree-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            font-size: 11px;
+        }
+        
+        .tree-stat-item {
+            text-align: center;
+        }
+        
+        .tree-stat-value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #64ffda;
+        }
+        
+        .tree-stat-label {
+            color: #888;
+            margin-top: 2px;
+        }
+        
+        .tree-help {
+            font-size: 10px;
+            color: #666;
+            margin-left: auto;
+        }
+        
+        .tree-help kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-family: inherit;
+            color: #aaa;
+        }
+        
+        /* Camera help tooltip */
+        .camera-help {
+            font-size: 9px;
+            color: #666;
+            margin-top: 4px;
+            line-height: 1.3;
+        }
+        
+        .camera-help kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-family: inherit;
+            color: #aaa;
+        }
+        
+        /* Toggle switch for Sudden Death mode */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 18px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.2);
+            transition: 0.3s;
+            border-radius: 18px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 12px;
+            width: 12px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        
+        .toggle-switch input:checked + .toggle-slider {
+            background: linear-gradient(135deg, #ff4444 0%, #ff6666 100%);
+        }
+        
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(18px);
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <div id="ui-overlay">
+        <!-- Left Panel - Evolution Stats & Controls -->
+        <div id="left-panel" class="panel">
+            <h3>&#x1F9EC; Evolution</h3>
+            
+            <div class="stat-row">
+                <span class="stat-label">Gen</span>
+                <span class="stat-value" id="generation">1</span>
+                <span class="stat-label" style="margin-left:8px">Pop</span>
+                <span class="stat-value" id="creature-id">0</span>
+                <span class="stat-label" style="margin-left:8px">Time</span>
+                <span class="stat-value" id="time-remaining">60s</span>
+            </div>
+            
+            <div id="progress-bar">
+                <div id="progress-fill"></div>
+            </div>
+            
+            <div class="stat-row">
+                <span class="stat-label">Best Dist</span>
+                <span class="stat-value" id="current-distance">0.0m</span>
+                <span class="stat-label" style="margin-left:8px">Height</span>
+                <span class="stat-value" id="current-height">0.0m</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Champ Fitness</span>
+                <span class="stat-value" id="champ-fitness">0.0</span>
+            </div>
+            
+            <div class="controls-section">
+                <!-- Settings that can only be changed before starting -->
+                <div class="inline-setting">
+                    <span>Variants/config:</span>
+                    <input type="number" id="instances-input" value="4" min="1" max="10">
+                </div>
+                <div class="inline-setting">
+                    <span>Configurations:</span>
+                    <input type="number" id="configs-input" value="5" min="1" max="20">
+                </div>
+                <div class="inline-setting">
+                    <span>Blocks/gen:</span>
+                    <input type="number" id="blocks-per-gen-input" value="1" min="1" max="4">
+                </div>
+                <div class="inline-setting">
+                    <span>Max blocks:</span>
+                    <input type="number" id="max-blocks-input" value="0" min="0" max="50" title="Maximum blocks per creature (0 = unlimited). When reached, that genetic line is complete.">
+                </div>
+                <div class="inline-setting">
+                    <span>Round duration (s):</span>
+                    <input type="number" id="round-duration-input" value="60" min="30" max="600" step="30" title="Duration of each evolution round (30s-10min)">
+                </div>
+                <div class="inline-setting">
+                    <span>&#x1F30D; Gravity:</span>
+                    <input type="range" id="gravity-slider" value="100" min="10" max="200" step="10" style="width: 80px; vertical-align: middle;">
+                    <span id="gravity-display" style="min-width: 35px; display: inline-block;">100%</span>
+                </div>
+                <div class="hint-text" style="margin-top: 2px;">Day cycle: sunrise to sunset</div>
+                <div class="checkbox-row">
+                    <label title="Randomize block count from 1 to max">
+                        <input type="checkbox" id="random-blocks-checkbox">
+                        <span>Random #</span>
+                    </label>
+                    <label title="Allow blocks to chain together forming limbs">
+                        <input type="checkbox" id="limb-gen-checkbox">
+                        <span>Limbs</span>
+                    </label>
+                </div>
+                
+                <div class="mode-selector">
+                    <label>Fitness Mode:</label>
+                    <select id="fitness-mode">
+                        <option value="distance">&#x1F3C3; Distance</option>
+                        <option value="efficiency">&#x26A1; Efficiency</option>
+                        <option value="jump">&#x1F680; Jump Height</option>
+                        <option value="area">&#x1F5FA; Area Coverage</option>
+                        <option value="outcast">&#x1F47D; Outcast</option>
+                        <option value="spartan">&#x1F3C5; Spartan</option>
+                        <option value="random" selected>&#x1F3B2; Random</option>
+                    </select>
+                    <div class="mode-description" id="mode-description">Changes each generation</div>
+                </div>
+                
+                <!-- Sudden Death Mode toggle -->
+                <div class="inline-setting">
+                    <span>&#x1F480; Sudden Death:</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="sudden-death-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="mode-description" id="sudden-death-desc">Worst 75% eliminated after 10s</div>
+                
+                <!-- Start/Pause/Skip buttons -->
+                <div class="button-group" style="margin-top: 6px;">
+                    <button id="start-btn">&#x25B6; Start</button>
+                    <button id="pause-btn" disabled>&#x23F8; Pause</button>
+                    <button id="skip-btn" disabled>&#x23ED; Skip</button>
+                </div>
+            </div>
+            
+            <div class="controls-section">
+                <div class="stat-row">
+                    <span class="stat-label">Target</span>
+                    <span class="stat-value highlight" id="target-fitness">0.0</span>
+                    <span class="stat-label" style="margin-left:8px">&#x2705;</span>
+                    <span class="stat-value" id="completed-lines" title="Completed genetic lines (reached max blocks)">0</span>
+                    <span class="stat-label">&#x274C;</span>
+                    <span class="stat-value" id="dead-ends" title="Dead ends">0</span>
+                    <span class="stat-label">&#x21A9;</span>
+                    <span class="stat-value" id="backtracks" title="Backtracks">0</span>
+                </div>
+                <div class="inline-setting">
+                    <span>Tournament:</span>
+                    <input type="number" id="tournament-size" value="10" min="2" max="50">
+                </div>
+                <div class="button-group" style="margin-top: 4px;">
+                    <button id="evolution-tree-btn" class="secondary">&#x1F333; Tree</button>
+                    <button id="tournament-btn" class="secondary" disabled>&#x1F3C6; Tournament</button>
+                </div>
+                <div class="button-group" style="margin-top: 4px;">
+                    <button id="save-btn" class="secondary" title="Save simulation to file">&#x1F4BE; Save</button>
+                    <button id="load-btn" class="secondary" title="Load simulation from file">&#x1F4C2; Load</button>
+                </div>
+                <!-- Hidden file input for loading saves -->
+                <input type="file" id="load-file-input" accept=".json" style="display: none;">
+            </div>
+        </div>
+        
+        <!-- Right Panel - Current Champion -->
+        <div id="right-panel" class="panel">
+            <h3>&#x1F3C6; Champion</h3>
+            <div class="stat-row">
+                <span class="stat-label">Blocks</span>
+                <span class="stat-value" id="block-count">-</span>
+                <span class="stat-label" style="margin-left:8px">Defenses</span>
+                <span class="stat-value" id="champ-defenses">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Dist</span>
+                <span class="stat-value" id="champ-distance">0.0m</span>
+                <span class="stat-label" style="margin-left:8px">Height</span>
+                <span class="stat-value" id="champ-height">0.0m</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Jump</span>
+                <span class="stat-value" id="champ-jump">0.0m</span>
+                <span class="stat-label" style="margin-left:8px">Tiles</span>
+                <span class="stat-value" id="champ-tiles">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Efficiency</span>
+                <span class="stat-value" id="champ-efficiency">0.0</span>
+                <span class="stat-label" style="margin-left:8px; font-size:9px;">(dist/tile)</span>
+            </div>
+            <div class="hint-text">Champion genes passed to next gen</div>
+        </div>
+        
+        <!-- Selected Creature Panel -->
+        <div id="selected-creature-panel" class="panel">
+            <h3>&#x1F50D; Focus</h3>
+            <div class="stat-row">
+                <span class="stat-label">Name</span>
+                <span class="stat-value highlight" id="sel-name">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Type</span>
+                <span class="stat-value highlight" id="sel-config">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Blocks</span>
+                <span class="stat-value highlight" id="sel-blocks">-</span>
+                <span class="stat-label" style="margin-left:8px">Fitness</span>
+                <span class="stat-value highlight" id="sel-fitness">0.0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Dist</span>
+                <span class="stat-value highlight" id="sel-distance">0.0m</span>
+                <span class="stat-label" style="margin-left:8px">Height</span>
+                <span class="stat-value highlight" id="sel-height">0.0m</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Jump</span>
+                <span class="stat-value highlight" id="sel-jump">0.0m</span>
+                <span class="stat-label" style="margin-left:8px">Tiles</span>
+                <span class="stat-value highlight" id="sel-tiles">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Efficiency</span>
+                <span class="stat-value highlight" id="sel-efficiency">0.0</span>
+                <span class="stat-label" style="margin-left:8px; font-size:9px;">(dist/tile)</span>
+            </div>
+            
+            <!-- Current Mode Score with formula -->
+            <div class="stat-row" id="sel-mode-row" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px; margin-top: 4px;">
+                <span class="stat-label" id="sel-mode-label">Mode Score</span>
+                <span class="stat-value highlight" id="sel-mode-score">0.0</span>
+            </div>
+            <div class="hint-text" id="sel-mode-formula" style="font-size: 8px;">-</div>
+            
+            <!-- All Mode Scores comparison -->
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px; margin-top: 4px;">
+                <div class="hint-text" style="color: #888; margin-bottom: 2px;">All Mode Scores:</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1px; font-size: 9px;">
+                    <span><span style="color:#888;">&#x1F3C3;</span> <span id="sel-score-distance" style="color:#64ffda;">0</span></span>
+                    <span><span style="color:#888;">&#x26A1;</span> <span id="sel-score-efficiency" style="color:#64ffda;">0</span></span>
+                    <span><span style="color:#888;">&#x1F680;</span> <span id="sel-score-jump" style="color:#64ffda;">0</span></span>
+                    <span><span style="color:#888;">&#x1F5FA;</span> <span id="sel-score-area" style="color:#64ffda;">0</span></span>
+                    <span style="grid-column: span 2;"><span style="color:#888;">&#x1F47D;</span> Outcast: <span id="sel-score-outcast" style="color:#64ffda;">0</span> <span style="color:#666;">(vs pop avg)</span></span>
+                    <span style="grid-column: span 2;"><span style="color:#888;">&#x1F3C5;</span> Spartan: <span id="sel-score-spartan" style="color:#64ffda;">0</span> <span style="color:#666;">(all-around)</span></span>
+                </div>
+            </div>
+            
+            <div class="hint-text">Click empty space to deselect</div>
+        </div>
+        
+        <!-- Tournament Leaderboard Panel - shown during tournaments instead of modal -->
+        <div id="tournament-leaderboard" class="panel">
+            <h3>&#x1F3C6; Tournament</h3>
+            <div class="stat-row">
+                <span class="stat-label">Mode</span>
+                <span class="stat-value" id="tournament-mode">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Time</span>
+                <span class="stat-value" id="tournament-time">60s</span>
+            </div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); margin-top: 6px; padding-top: 6px;">
+                <div class="hint-text" style="color: #888; margin-bottom: 4px;">Live Rankings:</div>
+                <div id="tournament-rankings">
+                    <!-- Rankings will be populated dynamically -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Panel - Camera Controls -->
+        <div id="bottom-panel" class="panel">
+            <div class="button-group">
+                <button id="cam-follow" class="active">&#x1F4F9; Follow</button>
+                <button id="cam-overview" class="secondary">&#x1F30D; Overview</button>
+                <button id="cam-reset" class="secondary">&#x21BA; Reset</button>
+            </div>
+            <div class="camera-help">
+                <span id="camera-help-text"><kbd>Drag</kbd> rotate &middot; <kbd>Scroll</kbd> zoom &middot; <kbd>Click</kbd> select</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Evolution Tree Modal -->
+    <div id="evolution-tree-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 850px;">
+            <div class="modal-header">
+                <h2>&#x1F333; Evolution Tree</h2>
+                <button class="modal-close" id="close-tree-modal">&#x2715;</button>
+            </div>
+            
+            <!-- Tree Controls -->
+            <div class="tree-controls">
+                <button id="tree-reset-view" class="secondary">&#x21BA; Reset View</button>
+                <button id="tree-fit-view" class="secondary">&#x2922; Fit to View</button>
+                <button id="tree-toggle-mode" class="secondary" title="Toggle between lineage-only and full view">&#x1F500; Toggle View</button>
+                <button id="tree-spawn-btn" class="secondary" disabled title="Select a creature first">&#x1F331; Spawn</button>
+                <button id="tree-lineage-btn" class="secondary" disabled title="Select a creature first">&#x1F4C8; Playback</button>
+                <button id="tree-terrarium-btn" class="secondary" disabled title="Select a creature first">&#x1F33F; Terrarium</button>
+                <span class="tree-help">
+                    <kbd>Click</kbd> select &middot; <kbd>Scroll</kbd> zoom &middot; <kbd>Drag</kbd> pan
+                </span>
+            </div>
+            
+            <!-- Canvas Container for Graphical Tree -->
+            <div id="tree-canvas-container">
+                <!-- Canvas will be created dynamically -->
+            </div>
+            
+            <!-- Statistics Summary -->
+            <div class="tree-stats">
+                <div class="tree-stats-grid">
+                    <div class="tree-stat-item">
+                        <div class="tree-stat-value" id="tree-stat-total">0</div>
+                        <div class="tree-stat-label">Total Nodes</div>
+                    </div>
+                    <div class="tree-stat-item">
+                        <div class="tree-stat-value" id="tree-stat-champions" style="color: #4ade80;">0</div>
+                        <div class="tree-stat-label">Champions</div>
+                    </div>
+                    <div class="tree-stat-item">
+                        <div class="tree-stat-value" id="tree-stat-deadends" style="color: #f87171;">0</div>
+                        <div class="tree-stat-label">Dead Ends</div>
+                    </div>
+                    <div class="tree-stat-item">
+                        <div class="tree-stat-value" id="tree-stat-branches" style="color: #fbbf24;">0</div>
+                        <div class="tree-stat-label">Branches</div>
+                    </div>
+                    <div class="tree-stat-item">
+                        <div class="tree-stat-value" id="tree-stat-species" style="color: #a78bfa;">0</div>
+                        <div class="tree-stat-label">Species</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lineage Playback Panel - shown during lineage playback mode -->
+    <div id="lineage-playback-panel" class="panel" style="position: absolute; top: 150px; right: 10px; width: 220px; display: none; border: 2px solid #a78bfa;">
+        <h3>&#x1F4C8; Lineage Playback</h3>
+        <div class="stat-row">
+            <span class="stat-label">Creature</span>
+            <span class="stat-value highlight" id="lineage-current-name">-</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Step</span>
+            <span class="stat-value" id="lineage-step">0</span>
+            <span class="stat-label" style="margin-left:4px">of</span>
+            <span class="stat-value" id="lineage-total">0</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Generation</span>
+            <span class="stat-value highlight" id="lineage-generation">1</span>
+            <span class="stat-label" style="margin-left:8px">Blocks</span>
+            <span class="stat-value highlight" id="lineage-blocks">2</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Day</span>
+            <span class="stat-value" id="lineage-day">1</span>
+            <span class="stat-label" style="margin-left:4px">/ <span id="lineage-day-max">60</span>s</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Day Length</span>
+            <input type="number" id="lineage-day-length" value="60" min="5" max="300" step="5" style="width: 50px;">
+            <span class="stat-label">sec</span>
+        </div>
+        <div id="lineage-progress-bar" style="height: 4px; background: rgba(100,100,100,0.3); border-radius: 2px; margin: 6px 0;">
+            <div id="lineage-progress-fill" style="height: 100%; background: linear-gradient(90deg, #a78bfa, #64ffda); width: 0%; border-radius: 2px; transition: width 0.3s;"></div>
+        </div>
+        <div class="button-group" style="margin-top: 6px;">
+            <button id="lineage-prev-btn" class="secondary" title="Previous ancestor">&#x23EE;</button>
+            <button id="lineage-pause-btn" class="secondary" title="Pause/Resume">&#x23F8;</button>
+            <button id="lineage-next-btn" class="secondary" title="Next descendant">&#x23ED;</button>
+        </div>
+        <div class="button-group" style="margin-top: 4px;">
+            <button id="lineage-exit-btn" style="width: 100%;">&#x2716; Exit Playback</button>
+        </div>
+        <div class="hint-text" style="margin-top: 4px;">Watch evolution unfold day by day</div>
+    </div>
+    
+    <!-- Terrarium Panel - shown during terrarium/pet mode -->
+    <div id="terrarium-panel" class="panel" style="position: absolute; top: 150px; right: 10px; width: 220px; display: none; border: 2px solid #4ade80;">
+        <h3>&#x1F33F; Terrarium</h3>
+        <div class="stat-row">
+            <span class="stat-label">Pet</span>
+            <span class="stat-value highlight" id="terrarium-name">-</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Generation</span>
+            <span class="stat-value" id="terrarium-generation">1</span>
+            <span class="stat-label" style="margin-left:8px">Blocks</span>
+            <span class="stat-value" id="terrarium-blocks">2</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Distance</span>
+            <span class="stat-value highlight" id="terrarium-distance">0.0m</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Height</span>
+            <span class="stat-value highlight" id="terrarium-height">0.0m</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Time Alive</span>
+            <span class="stat-value" id="terrarium-time">0:00</span>
+        </div>
+        <div class="button-group" style="margin-top: 6px;">
+            <button id="terrarium-reset-btn" class="secondary" title="Reset creature position">&#x21BA; Reset</button>
+            <button id="terrarium-exit-btn">&#x2716; Exit</button>
+        </div>
+        <div class="hint-text" style="margin-top: 4px;">Your creature roams freely - no time limits!</div>
+    </div>
+
+    <!-- Tournament Results Modal -->
+    <div id="tournament-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>&#x1F3C6; Tournament of Champions</h2>
+                <button class="modal-close" id="close-tournament-modal">&#x2715;</button>
+            </div>
+            <div id="tournament-status" style="text-align: center; padding: 20px; color: #64ffda;">
+                <!-- Tournament status shown here -->
+            </div>
+            <div id="tournament-content" class="tree-container">
+                <!-- Tournament results inserted dynamically -->
+            </div>
+            <div style="text-align: center; margin-top: 15px;">
+                <button id="tournament-resume-btn" class="secondary" style="display: none;">&#x25B6; Resume Evolution</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    
+    <!-- Application -->
+    <script src="creature.js"></script>
+    <script src="visual-effects.js"></script>
+    <script src="evolution.js"></script>
+    <script src="evolution-tree.js"></script>
+    <script src="simulation.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
