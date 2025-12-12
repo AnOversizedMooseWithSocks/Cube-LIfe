@@ -309,6 +309,13 @@ class EvolutionManager {
                 // Generate the body structure from the structure seed
                 creature.generateBodyFromSeed(structureSeed, numBlocks);
                 
+                // Add any sensors set to 'start' mode to the creature
+                let addedSensorCount = 0;
+                if (typeof SensorConfig !== 'undefined' && SensorConfig.getStartTypes().length > 0) {
+                    const sensorRng = new SeededRandom(structureSeed + variantIndex);
+                    addedSensorCount = addAllEnabledSensors(creature, sensorRng);
+                }
+                
                 // Generate unique movement patterns for this variant
                 const movementSeed = Math.floor(Math.random() * 1000000);
                 creature.generateMovementsFromSeed(movementSeed);
@@ -325,9 +332,10 @@ class EvolutionManager {
                 creature.parentName = null; // Gen 1 has no parent
                 creature.isDefendingChampion = false; // Gen 1 has no defending champion
                 
-                // VALIDATION: Verify block count
-                if (creature.blocks.length !== numBlocks) {
-                    console.error(`[VALIDATION ERROR] ${creature.name} has ${creature.blocks.length} blocks, expected ${numBlocks}`);
+                // VALIDATION: Verify block count (accounting for added sensors)
+                const expectedBlocks = numBlocks + addedSensorCount;
+                if (creature.blocks.length !== expectedBlocks) {
+                    console.error(`[VALIDATION ERROR] ${creature.name} has ${creature.blocks.length} blocks, expected ${expectedBlocks}`);
                 }
                 
                 this.population.push(creature);
@@ -336,12 +344,21 @@ class EvolutionManager {
         
         // VALIDATION: Verify all Gen 1 creatures
         console.log(`\n=== Generation 1 Population Summary ===`);
-        console.log(`Expected blocks per creature: ${numBlocks}`);
+        
+        // Calculate expected block count (base blocks + any sensors in 'start' mode)
+        let sensorCount = 0;
+        if (typeof SensorConfig !== 'undefined' && SensorConfig.getStartTypes().length > 0) {
+            sensorCount = SensorConfig.getStartTypes().length;
+            console.log(`Base blocks: ${numBlocks}, Sensor blocks: ${sensorCount}`);
+        }
+        const expectedTotal = numBlocks + sensorCount;
+        console.log(`Expected blocks per creature: ${expectedTotal}${sensorCount > 0 ? ` (${numBlocks} base + ${sensorCount} sensors)` : ''}`);
         
         let invalidCount = 0;
         for (let creature of this.population) {
-            if (creature.blocks.length !== numBlocks) {
-                console.error(`[VALIDATION ERROR] ${creature.name} has ${creature.blocks.length} blocks`);
+            // Allow for slight variation if some sensors couldn't attach (no available faces)
+            if (creature.blocks.length < numBlocks || creature.blocks.length > expectedTotal) {
+                console.error(`[VALIDATION ERROR] ${creature.name} has ${creature.blocks.length} blocks, expected ${expectedTotal}`);
                 invalidCount++;
             }
         }
@@ -353,7 +370,7 @@ class EvolutionManager {
         if (invalidCount > 0) {
             console.error(`[VALIDATION FAILED] ${invalidCount} creatures have incorrect block counts!`);
         } else {
-            console.log(`[VALIDATION PASSED] All creatures have ${numBlocks} blocks`);
+            console.log(`[VALIDATION PASSED] All creatures have correct block counts`);
         }
         console.log(`========================================\n`);
     }
@@ -559,8 +576,8 @@ class EvolutionManager {
             // Save this generation's results to history
             this.saveGenerationToHistory(rankedPopulation, actualBestFitness);
             
-            // REINFORCEMENT LEARNING: Boost the winning creature's movement patterns
-            this.reinforceMovements(actualBest);
+            // NOTE: Movement reinforcement removed - it bypassed the DNA-based deterministic system
+            // Changes made by reinforceMovements were lost on save/load since they weren't encoded in DNA
             
             // Add ALL creatures from this generation to tree
             // Parent is the current branch (the creature they evolved from)
@@ -771,7 +788,7 @@ class EvolutionManager {
         
         // First pass: gather all metrics and find ranges for normalization
         const metrics = this.population.map((creature, index) => {
-            const tilesCount = creature.tilesLit ? creature.tilesLit.size : 0;
+            const tilesCount = creature.tilesLit ? creature.tilesLit.length : 0;
             return {
                 index: index,
                 creature: creature,
@@ -853,63 +870,6 @@ class EvolutionManager {
     }
     
     /**
-     * REINFORCEMENT LEARNING: Enhance successful movement patterns
-     * 
-     * When a creature wins, we reinforce its movements to make them more effective:
-     * 1. Boost rotation speeds by 10-25% (successful patterns should be stronger)
-     * 2. Convert static actions (direction=0) to active movements
-     * 3. Shorten durations slightly (quicker, more responsive movements)
-     * 4. Remove very slow actions (below threshold)
-     * 
-     * This creates evolutionary pressure toward faster, more active movement patterns.
-     */
-    reinforceMovements(creature) {
-        console.log(`[MUSCLE] Reinforcing movement patterns for winning creature...`);
-        
-        let reinforcementCount = 0;
-        let staticConverted = 0;
-        let speedBoosts = 0;
-        
-        for (let joint of creature.joints) {
-            for (let i = 0; i < joint.actions.length; i++) {
-                const action = joint.actions[i];
-                
-                // 1. Convert static actions to active ones (50% chance)
-                if (action.direction === 0 && Math.random() < 0.5) {
-                    action.direction = Math.random() < 0.5 ? 1 : -1;
-                    action.rotationSpeed = 0.1 + Math.random() * 0.15; // Give it a decent speed
-                    staticConverted++;
-                    reinforcementCount++;
-                }
-                
-                // 2. Boost rotation speed by 10-25%
-                if (action.direction !== 0) {
-                    const boost = 1.1 + Math.random() * 0.15; // 10-25% boost
-                    action.rotationSpeed = Math.min(0.5, action.rotationSpeed * boost); // Cap at 0.5
-                    speedBoosts++;
-                    reinforcementCount++;
-                }
-                
-                // 3. Shorten duration slightly (5-15% reduction) for snappier movements
-                action.duration = Math.max(10, Math.floor(action.duration * (0.85 + Math.random() * 0.1)));
-                
-                // 4. If speed is too low, boost it to minimum threshold
-                if (action.rotationSpeed < 0.08 && action.direction !== 0) {
-                    action.rotationSpeed = 0.08 + Math.random() * 0.1;
-                    reinforcementCount++;
-                }
-            }
-            
-            // 5. Remove actions that are still static (keep at least 2 actions per joint)
-            if (joint.actions.length > 2) {
-                joint.actions = joint.actions.filter(a => a.direction !== 0 || joint.actions.length <= 2);
-            }
-        }
-        
-        console.log(`   Reinforced ${reinforcementCount} actions: ${speedBoosts} speed boosts, ${staticConverted} static->active conversions`);
-    }
-    
-    /**
      * Log an evolution event
      */
     logEvent(type, details) {
@@ -986,7 +946,10 @@ class EvolutionManager {
                 // structureSeed is the random seed that generated the body shape
                 speciesId: creature.structureSeed || null,
                 configIndex: creature.configIndex !== undefined ? creature.configIndex : null,
-                variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null
+                variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null,
+                // Sensor/special block tracking
+                sensors: creature.getSpecialBlocks ? creature.getSpecialBlocks().map(s => s.type) : [],
+                lastAddedSensor: creature.lastAddedSensor || null
             };
             
             // Add child reference to parent
@@ -1043,7 +1006,10 @@ class EvolutionManager {
             // Species tracking - creatures with same structureSeed have identical body plans
             speciesId: creature.structureSeed || null,
             configIndex: creature.configIndex !== undefined ? creature.configIndex : null,
-            variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null
+            variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null,
+            // Sensor/special block tracking
+            sensors: creature.getSpecialBlocks ? creature.getSpecialBlocks().map(s => s.type) : [],
+            lastAddedSensor: creature.lastAddedSensor || null
         };
         
         // Add child reference to parent
@@ -1762,7 +1728,7 @@ class EvolutionManager {
         championClone.fitness = 0;
         championClone.maxDistance = 0;
         championClone.maxHeight = 0;
-        championClone.tilesLit = new Set();
+        championClone.tilesLit = [];
         championClone.maxJumpHeight = 0;
         championClone.hasLandedAfterSpawn = false;
         championClone.groundedY = 0;
@@ -1825,7 +1791,7 @@ class EvolutionManager {
                 newCreature.fitness = 0;
                 newCreature.maxDistance = 0;
                 newCreature.maxHeight = 0;
-                newCreature.tilesLit = new Set();
+                newCreature.tilesLit = [];
                 newCreature.maxJumpHeight = 0;
                 newCreature.hasLandedAfterSpawn = false;
                 newCreature.groundedY = 0;
@@ -1959,7 +1925,7 @@ class EvolutionManager {
                         retryCreature.fitness = 0;
                         retryCreature.maxDistance = 0;
                         retryCreature.maxHeight = 0;
-                        retryCreature.tilesLit = new Set();
+                        retryCreature.tilesLit = [];
                         retryCreature.maxJumpHeight = 0;
                         retryCreature.hasLandedAfterSpawn = false;
                         retryCreature.groundedY = 0;
@@ -2481,6 +2447,9 @@ class EvolutionManager {
                 parentId: node.parentId,
                 status: node.status,
                 children: node.children ? [...node.children] : [],
+                // Sensor/special block tracking
+                sensors: node.sensors ? [...node.sensors] : [],
+                lastAddedSensor: node.lastAddedSensor || null,
                 // Serialize the creature clone if present
                 creatureClone: node.creatureClone ? node.creatureClone.toJSON() : null
             };
@@ -2624,6 +2593,9 @@ class EvolutionManager {
                 parentId: node.parentId,
                 status: node.status,
                 children: node.children ? [...node.children] : [],
+                // Sensor/special block tracking
+                sensors: node.sensors ? [...node.sensors] : [],
+                lastAddedSensor: node.lastAddedSensor || null,
                 creatureClone: node.creatureClone ? Creature.fromJSON(node.creatureClone) : null
             }));
             

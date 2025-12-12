@@ -23,9 +23,9 @@ class EvolutionTreeRenderer {
         this.allNodes = [];  // Store all nodes before filtering
         this.currentBranchId = null;
         
-        // Display mode: 'full' shows all creatures, 'lineage' shows only the evolutionary path
+        // Display mode: 'champions' shows winning lineage, 'species' shows body plan diversity
         // Lineage mode shows: champions, branch_parents, backtrack_sources, dead_ends
-        this.displayMode = 'lineage';
+        this.displayMode = 'champions';
         
         // Layout settings
         this.nodeWidth = 160;       // Width of each node box (wider for more metrics)
@@ -88,27 +88,27 @@ class EvolutionTreeRenderer {
         this.treeWidth = 0;
         this.treeHeight = 0;
         
+        // Footprint animation state
+        this.footprintAnimationStart = 0;      // Timestamp when animation started
+        this.footprintAnimationDuration = 3000; // 3 seconds in milliseconds
+        this.footprintAnimatingNode = null;    // Which node's footprint is animating
+        this.animationFrameId = null;          // For canceling animation frame
+        
         // Bind event handlers
         this.setupEventListeners();
     }
     
     /**
-     * Toggle display mode between 'full', 'lineage', 'champions', and 'species'
-     * - full: Shows all creatures from all generations
-     * - lineage: Shows evolutionary path nodes (champions, dead ends, branch points)
+     * Toggle display mode between 'champions' and 'species'
      * - champions: Shows ONLY the winning lineage (cleanest view)
      * - species: Shows one representative per species per generation (body plan diversity)
      */
     toggleDisplayMode() {
-        // Cycle through: full -> lineage -> champions -> species -> full
-        if (this.displayMode === 'full') {
-            this.displayMode = 'lineage';
-        } else if (this.displayMode === 'lineage') {
-            this.displayMode = 'champions';
-        } else if (this.displayMode === 'champions') {
+        // Cycle between: champions -> species -> champions
+        if (this.displayMode === 'champions') {
             this.displayMode = 'species';
         } else {
-            this.displayMode = 'full';
+            this.displayMode = 'champions';
         }
         this.applyDisplayFilter();
         this.calculateLayout();
@@ -119,10 +119,10 @@ class EvolutionTreeRenderer {
     
     /**
      * Set display mode directly
-     * @param {string} mode - 'full', 'lineage', 'champions', or 'species'
+     * @param {string} mode - 'champions' or 'species'
      */
     setDisplayMode(mode) {
-        if (mode === 'full' || mode === 'lineage' || mode === 'champions' || mode === 'species') {
+        if (mode === 'champions' || mode === 'species') {
             this.displayMode = mode;
             this.applyDisplayFilter();
             this.calculateLayout();
@@ -133,8 +133,6 @@ class EvolutionTreeRenderer {
     
     /**
      * Apply display filter based on current mode
-     * - 'full': Show all nodes
-     * - 'lineage': Show nodes that are part of evolutionary branches
      * - 'champions': Show only the winning path (cleanest, most compact view)
      * - 'species': Show best creature per species per generation (body plan diversity)
      * 
@@ -145,15 +143,7 @@ class EvolutionTreeRenderer {
     applyDisplayFilter() {
         let filteredNodes;
         
-        if (this.displayMode === 'full') {
-            // Show everything - no additional processing needed
-            this.nodes = [...this.allNodes];
-            return;
-        } else if (this.displayMode === 'champions') {
-            // Champions only: show just the winning lineage (including completed lines)
-            const championsOnly = ['champion', 'backtrack_source', 'complete'];
-            filteredNodes = this.allNodes.filter(n => championsOnly.includes(n.status));
-        } else if (this.displayMode === 'species') {
+        if (this.displayMode === 'species') {
             // Species mode: show best creature per species per generation
             const generationSpeciesMap = new Map();
             
@@ -169,9 +159,9 @@ class EvolutionTreeRenderer {
             
             filteredNodes = Array.from(generationSpeciesMap.values());
         } else {
-            // Lineage mode: show evolutionary branch nodes (including completed lines)
-            const lineageStatuses = ['champion', 'branch_parent', 'backtrack_source', 'dead_end', 'complete'];
-            filteredNodes = this.allNodes.filter(n => lineageStatuses.includes(n.status));
+            // Champions mode (default): show just the winning lineage (including completed lines)
+            const championsOnly = ['champion', 'backtrack_source', 'complete'];
+            filteredNodes = this.allNodes.filter(n => championsOnly.includes(n.status));
         }
         
         // Include any missing ancestors to maintain tree connectivity
@@ -365,6 +355,14 @@ class EvolutionTreeRenderer {
         if (foundNode !== this.hoveredNode) {
             this.hoveredNode = foundNode;
             
+            // Start footprint animation if this node has tile data
+            if (foundNode && foundNode.creatureClone && 
+                foundNode.creatureClone.tilesLit && foundNode.creatureClone.tilesLit.length > 0) {
+                this.startFootprintAnimation(foundNode);
+            } else {
+                this.stopFootprintAnimation();
+            }
+            
             // Update cursor: pointer on clickable nodes, grab otherwise
             if (foundNode && this.onNodeClick) {
                 this.canvas.style.cursor = 'pointer';
@@ -374,6 +372,49 @@ class EvolutionTreeRenderer {
             
             this.render();
         }
+    }
+    
+    /**
+     * Start the footprint animation for a node
+     * Animates tiles appearing in order over 3 seconds
+     */
+    startFootprintAnimation(node) {
+        this.footprintAnimatingNode = node;
+        this.footprintAnimationStart = performance.now();
+        
+        // Cancel any existing animation loop
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+        
+        // Start animation loop
+        const animate = () => {
+            const elapsed = performance.now() - this.footprintAnimationStart;
+            
+            // Keep animating while we're still on this node and animation isn't complete
+            if (this.hoveredNode === this.footprintAnimatingNode && 
+                elapsed < this.footprintAnimationDuration) {
+                this.render();
+                this.animationFrameId = requestAnimationFrame(animate);
+            } else {
+                // Animation complete - do one final render showing all tiles
+                this.render();
+                this.animationFrameId = null;
+            }
+        };
+        
+        this.animationFrameId = requestAnimationFrame(animate);
+    }
+    
+    /**
+     * Stop any running footprint animation
+     */
+    stopFootprintAnimation() {
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        this.footprintAnimatingNode = null;
     }
     
     /**
@@ -860,6 +901,28 @@ class EvolutionTreeRenderer {
         ctx.fillStyle = '#64ffda';
         ctx.fillText(`Eff: ${efficiency.toFixed(3)} (d/t)`, x + 6, y + 66);
         
+        // Draw sensor indicator if creature has sensors (compact badge)
+        if (node.sensors && node.sensors.length > 0) {
+            const sensorCount = node.sensors.length;
+            const badgeX = x + 90;
+            const badgeY = y + 60;
+            
+            // Compact sensor count badge
+            ctx.fillStyle = 'rgba(170, 68, 255, 0.4)';
+            const badgeWidth = node.lastAddedSensor ? 42 : 22;
+            ctx.fillRect(badgeX, badgeY, badgeWidth, 10);
+            ctx.font = `bold 7px ${this.fontFamily}`;
+            ctx.fillStyle = '#aa44ff';
+            ctx.textAlign = 'left';
+            ctx.fillText(`S:${sensorCount}`, badgeX + 2, badgeY + 7);
+            
+            // If a sensor was just added, show "+1" indicator
+            if (node.lastAddedSensor) {
+                ctx.fillStyle = '#4ade80';
+                ctx.fillText('+1', badgeX + 24, badgeY + 7);
+            }
+        }
+        
         // Draw "CURRENT" badge if this is the current branch
         if (isCurrent) {
             ctx.fillStyle = 'rgba(100, 255, 218, 0.2)';
@@ -913,7 +976,7 @@ class EvolutionTreeRenderer {
     getStatusIcon(status) {
         const icons = {
             'champion': '[C]',
-            'complete': '[✓]',
+            'complete': '[*]',
             'dead_end': '[X]',
             'eliminated': '[-]',
             'competitor': '[.]',
@@ -934,14 +997,15 @@ class EvolutionTreeRenderer {
         const lineHeight = 16;
         
         // Different legend items based on display mode
-        const items = this.displayMode === 'lineage' ? [
+        // Champions mode shows fewer items (just the winning path)
+        // Species mode shows more items since it includes variety
+        const items = this.displayMode === 'champions' ? [
             { icon: '[C]', label: 'Champion', color: this.colors.champion },
-            { icon: '[✓]', label: 'Complete', color: this.colors.complete },
-            { icon: '[X]', label: 'Dead End', color: this.colors.dead_end },
-            { icon: '[B]', label: 'Branch', color: this.colors.branch_parent }
+            { icon: '[*]', label: 'Complete', color: this.colors.complete },
+            { icon: '[<]', label: 'Backtrack', color: this.colors.backtrack_source }
         ] : [
             { icon: '[C]', label: 'Champion', color: this.colors.champion },
-            { icon: '[✓]', label: 'Complete', color: this.colors.complete },
+            { icon: '[*]', label: 'Complete', color: this.colors.complete },
             { icon: '[X]', label: 'Dead End', color: this.colors.dead_end },
             { icon: '[-]', label: 'Eliminated', color: this.colors.eliminated },
             { icon: '[.]', label: 'Competitor', color: this.colors.competitor },
@@ -964,11 +1028,7 @@ class EvolutionTreeRenderer {
         ctx.fillStyle = '#64ffda';
         ctx.textAlign = 'left';
         let modeLabel;
-        if (this.displayMode === 'full') {
-            modeLabel = 'FULL VIEW';
-        } else if (this.displayMode === 'lineage') {
-            modeLabel = 'LINEAGE VIEW';
-        } else if (this.displayMode === 'species') {
+        if (this.displayMode === 'species') {
             modeLabel = 'SPECIES VIEW';
         } else {
             modeLabel = 'CHAMPIONS ONLY';
@@ -1022,12 +1082,14 @@ class EvolutionTreeRenderer {
         if (node.rank !== undefined) extraHeight += 15;
         // Add space for species info if available
         if (node.speciesId !== null && node.speciesId !== undefined) extraHeight += 15;
-        // Add space for click hint if applicable
-        if (this.onNodeClick) {
-            const spawnableStatuses = ['champion', 'backtrack_source', 'dead_end', 'branch_parent', 'competitor'];
-            if (spawnableStatuses.includes(node.status) && node.creatureClone) {
-                extraHeight += 25;
-            }
+        // Add space for sensor info if creature has sensors (now more compact)
+        if (node.sensors && node.sensors.length > 0) {
+            extraHeight += 15;  // One line for sensors
+            if (node.lastAddedSensor) extraHeight += 15;  // +New line
+        }
+        // Add space for tile footprint image if creature has tile data
+        if (node.creatureClone && node.creatureClone.tilesLit && node.creatureClone.tilesLit.length > 0) {
+            extraHeight += 100;  // Space for footprint image + label
         }
         const tooltipHeight = 260 + extraHeight;
         let x = Math.min(this.canvas.width - tooltipWidth - 10, this.lastMouseX + 15);
@@ -1102,6 +1164,27 @@ class EvolutionTreeRenderer {
             lineY += lineSpacing;
         }
         
+        // Sensor/special block info if creature has any (compact display)
+        if (node.sensors && node.sensors.length > 0) {
+            ctx.fillStyle = '#aa44ff';  // Purple for sensors
+            // Get abbreviated names for sensors
+            const abbrevMap = {
+                'gravity': 'Grv', 'light': 'Lgt', 'velocity': 'Vel',
+                'ground': 'Gnd', 'rhythm': 'Rhy', 'tilt': 'Tlt'
+            };
+            const sensorAbbrevs = node.sensors.map(type => abbrevMap[type] || type);
+            ctx.fillText(`Sensors: ${sensorAbbrevs.join(', ')}`, x + padding, lineY);
+            lineY += lineSpacing;
+            
+            // Show if a sensor was just added
+            if (node.lastAddedSensor) {
+                ctx.fillStyle = '#4ade80';  // Green for new
+                const addedAbbrev = abbrevMap[node.lastAddedSensor] || node.lastAddedSensor;
+                ctx.fillText(`+New: ${addedAbbrev}`, x + padding, lineY);
+                lineY += lineSpacing;
+            }
+        }
+        
         // Metrics section header
         ctx.fillStyle = '#64ffda';
         ctx.fillText('--- Raw Metrics ---', x + padding, lineY);
@@ -1157,26 +1240,147 @@ class EvolutionTreeRenderer {
             ctx.fillText(`Parent: ${node.parentName}`, x + padding, lineY);
         }
         
-        // Add "click to spawn" hint if callback is set
-        // Only show for nodes that can be spawned from
-        if (this.onNodeClick) {
-            const spawnableStatuses = ['champion', 'backtrack_source', 'dead_end', 'branch_parent', 'competitor'];
-            if (spawnableStatuses.includes(node.status) && node.creatureClone) {
-                lineY += lineSpacing + 5;
-                
-                // Separator line
-                ctx.strokeStyle = '#64ffda';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.moveTo(x + padding, lineY - 8);
-                ctx.lineTo(x + tooltipWidth - padding, lineY - 8);
-                ctx.stroke();
-                
-                // Click hint text
-                ctx.font = `bold 10px ${this.fontFamily}`;
-                ctx.fillStyle = '#64ffda';
-                ctx.fillText('\u{1F449} Click to spawn from this creature', x + padding, lineY);
+        // Draw tile footprint visualization if creature has tile data
+        if (node.creatureClone && node.creatureClone.tilesLit && node.creatureClone.tilesLit.length > 0) {
+            lineY += lineSpacing + 5;
+            
+            // Separator line
+            ctx.strokeStyle = '#64ffda';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + padding, lineY - 8);
+            ctx.lineTo(x + tooltipWidth - padding, lineY - 8);
+            ctx.stroke();
+            
+            // Label
+            ctx.font = `bold 10px ${this.fontFamily}`;
+            ctx.fillStyle = '#64ffda';
+            ctx.fillText('Footprint:', x + padding, lineY);
+            lineY += 8;
+            
+            // Draw the footprint image
+            this.drawTileFootprint(ctx, node.creatureClone.tilesLit, x + padding, lineY, tooltipWidth - padding * 2);
+        }
+    }
+    
+    /**
+     * Draw a visual representation of the creature's tile footprint
+     * Animates tiles appearing in order over 3 seconds when first displayed
+     * 
+     * @param {CanvasRenderingContext2D} ctx - Canvas context
+     * @param {Array} tilesLit - Array of tile coordinate strings like "x,z" in visitation order
+     * @param {number} drawX - Left edge of drawing area
+     * @param {number} drawY - Top edge of drawing area
+     * @param {number} maxWidth - Maximum width available for the image
+     */
+    drawTileFootprint(ctx, tilesLit, drawX, drawY, maxWidth) {
+        if (!tilesLit || tilesLit.length === 0) return;
+        
+        // Calculate animation progress (0 to 1)
+        // If animation is complete or not running, show all tiles
+        let animProgress = 1.0;
+        if (this.footprintAnimatingNode && this.footprintAnimationStart > 0) {
+            const elapsed = performance.now() - this.footprintAnimationStart;
+            animProgress = Math.min(1.0, elapsed / this.footprintAnimationDuration);
+        }
+        
+        // How many tiles to show based on animation progress
+        const tilesToShow = Math.floor(tilesLit.length * animProgress);
+        
+        // First pass: find bounding box of ALL tiles (so frame doesn't change during animation)
+        let minX = Infinity, maxX = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        let validCount = 0;
+        
+        for (const key of tilesLit) {
+            const [xStr, zStr] = key.split(',');
+            const tileX = parseInt(xStr, 10);
+            const tileZ = parseInt(zStr, 10);
+            
+            if (!isNaN(tileX) && !isNaN(tileZ)) {
+                validCount++;
+                minX = Math.min(minX, tileX);
+                maxX = Math.max(maxX, tileX);
+                minZ = Math.min(minZ, tileZ);
+                maxZ = Math.max(maxZ, tileZ);
             }
+        }
+        
+        if (validCount === 0) return;
+        
+        // Calculate dimensions of the footprint
+        const footprintWidth = maxX - minX + 1;
+        const footprintHeight = maxZ - minZ + 1;
+        
+        // Calculate pixel size to fit within available space
+        // Use max height of 70 pixels for the footprint
+        const maxHeight = 70;
+        const scaleX = maxWidth / footprintWidth;
+        const scaleZ = maxHeight / footprintHeight;
+        const pixelSize = Math.min(scaleX, scaleZ, 4);  // Cap at 4px per tile for readability
+        
+        // Calculate actual drawing dimensions
+        const imgWidth = footprintWidth * pixelSize;
+        const imgHeight = footprintHeight * pixelSize;
+        
+        // Center the footprint horizontally in the available space
+        const offsetX = drawX + (maxWidth - imgWidth) / 2;
+        const offsetY = drawY;
+        
+        // Draw background (dark grid area)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(offsetX - 2, offsetY - 2, imgWidth + 4, imgHeight + 4);
+        
+        // Draw tiles up to current animation progress
+        // Use a gradient from darker cyan (start) to bright cyan (end) based on visitation order
+        const totalTiles = tilesLit.length;
+        
+        for (let i = 0; i < tilesToShow; i++) {
+            const key = tilesLit[i];
+            const [xStr, zStr] = key.split(',');
+            const tileX = parseInt(xStr, 10);
+            const tileZ = parseInt(zStr, 10);
+            
+            if (isNaN(tileX) || isNaN(tileZ)) continue;
+            
+            // Color based on visitation order (0 = first, 1 = last)
+            const progress = totalTiles > 1 ? i / (totalTiles - 1) : 0;
+            
+            // Interpolate from darker cyan (#3a9988) to bright cyan (#64ffda)
+            const r = Math.floor(58 + progress * 42);    // 58 -> 100
+            const g = Math.floor(153 + progress * 102);  // 153 -> 255
+            const b = Math.floor(136 + progress * 82);   // 136 -> 218
+            
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            
+            // Calculate screen position (flip Z so positive goes up visually)
+            const screenX = offsetX + (tileX - minX) * pixelSize;
+            const screenY = offsetY + (maxZ - tileZ) * pixelSize;  // Flip Z
+            
+            // Draw the tile with a tiny gap for grid effect
+            const gap = pixelSize > 2 ? 0.5 : 0;
+            ctx.fillRect(screenX + gap, screenY + gap, pixelSize - gap * 2, pixelSize - gap * 2);
+        }
+        
+        // Draw border around the footprint
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(offsetX - 2, offsetY - 2, imgWidth + 4, imgHeight + 4);
+        
+        // Draw origin marker (spawn point at 0,0) if visible in the footprint
+        if (minX <= 0 && maxX >= 0 && minZ <= 0 && maxZ >= 0) {
+            const originScreenX = offsetX + (0 - minX) * pixelSize + pixelSize / 2;
+            const originScreenY = offsetY + (maxZ - 0) * pixelSize + pixelSize / 2;
+            
+            // Small crosshair at origin
+            ctx.strokeStyle = '#ff4444';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(originScreenX - 3, originScreenY);
+            ctx.lineTo(originScreenX + 3, originScreenY);
+            ctx.moveTo(originScreenX, originScreenY - 3);
+            ctx.lineTo(originScreenX, originScreenY + 3);
+            ctx.stroke();
         }
     }
     

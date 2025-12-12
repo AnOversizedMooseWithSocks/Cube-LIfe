@@ -29,6 +29,9 @@ class Application {
         this.terrariumNode = null;           // The node data for the terrarium creature
         this.terrariumStartTime = 0;         // When terrarium mode started
         
+        // Evolution tree modal state
+        this.pausedBeforeTreeOpen = false;   // Was simulation paused before opening tree?
+        
         // Graphical evolution tree renderer
         this.treeRenderer = null;
         
@@ -75,7 +78,13 @@ class Application {
         const activeMode = this.evolution.getActiveMode();
         
         // Calculate fitness using the current active mode
-        creature.calculateFitness(activeMode);
+        // For outcast mode, fitness should already be set by updateCrownPosition
+        // which calculates outcast scores for all creatures together.
+        // We can't recalculate for a single creature since outcast needs population context.
+        if (activeMode !== 'outcast') {
+            creature.calculateFitness(activeMode);
+        }
+        // Note: For outcast mode, we use the existing creature.fitness value
         
         // Basic stats
         document.getElementById('sel-blocks').textContent = creature.blocks.length;
@@ -103,6 +112,9 @@ class Application {
         }
         document.getElementById('sel-config').textContent = configInfo;
         
+        // Update special blocks (sensors) display
+        this.updateSelectedCreatureSensors(creature);
+        
         // Update hint text based on whether this is a followed or selected creature
         const hintElements = document.querySelectorAll('#selected-creature-panel .hint-text');
         const lastHint = hintElements[hintElements.length - 1];
@@ -112,6 +124,63 @@ class Application {
             } else {
                 lastHint.textContent = 'Click empty space to deselect';
             }
+        }
+    }
+    
+    /**
+     * Update the special blocks (sensors) display for the selected creature
+     * @param {Creature} creature - The creature to display sensors for
+     */
+    updateSelectedCreatureSensors(creature) {
+        const sensorsSection = document.getElementById('sel-sensors-section');
+        const sensorsList = document.getElementById('sel-sensors-list');
+        const sensorAdded = document.getElementById('sel-sensor-added');
+        const sensorAddedType = document.getElementById('sel-sensor-added-type');
+        
+        if (!sensorsSection || !sensorsList) return;
+        
+        // Get special blocks info
+        const specialBlocks = creature.getSpecialBlocks ? creature.getSpecialBlocks() : [];
+        
+        if (specialBlocks.length === 0) {
+            // No sensors - hide the section
+            sensorsSection.style.display = 'none';
+            return;
+        }
+        
+        // Show the section
+        sensorsSection.style.display = 'block';
+        
+        // Build compact sensor list (just abbreviations)
+        const sensorAbbrevs = specialBlocks.map(sensor => {
+            // Short abbreviations matching HTML labels
+            const abbrevMap = {
+                'gravity': 'Grv',
+                'light': 'Lgt', 
+                'velocity': 'Vel',
+                'ground': 'Gnd',
+                'rhythm': 'Rhy',
+                'tilt': 'Tilt'
+            };
+            return abbrevMap[sensor.type] || sensor.type.substring(0, 3);
+        });
+        sensorsList.textContent = sensorAbbrevs.join(' ');
+        
+        // Show "+" indicator if a sensor was just added
+        if (creature.lastAddedSensor) {
+            sensorAdded.style.display = 'inline';
+            // Get the short name for the sensor type
+            const abbrevMap = {
+                'gravity': 'Grv',
+                'light': 'Lgt', 
+                'velocity': 'Vel',
+                'ground': 'Gnd',
+                'rhythm': 'Rhy',
+                'tilt': 'Tilt'
+            };
+            sensorAddedType.textContent = abbrevMap[creature.lastAddedSensor] || creature.lastAddedSensor;
+        } else {
+            sensorAdded.style.display = 'none';
         }
     }
     
@@ -217,7 +286,7 @@ class Application {
             case 'spartan':
                 modeName = '\u{1F3C5} Spartan';  // Medal emoji
                 score = spartanScore;
-                formula = `DÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â1 + HÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â2 + TÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â0.2 + JÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â3 = ${score.toFixed(1)}`;
+                formula = `D*1 + H*2 + T*0.2 + J*3 = ${score.toFixed(1)}`;
                 break;
                 
             default:
@@ -251,30 +320,41 @@ class Application {
         
         // Camera controls
         document.getElementById('cam-follow').addEventListener('click', () => {
-            // Toggle follow leader on/off
+            // Toggle follow leader on/off (independent of overview mode)
             if (this.simulation.followLeader) {
                 // Turn off follow leader
                 this.simulation.followLeader = false;
+                // If in overview mode, zoom out to show all creatures
+                if (this.simulation.overviewMode) {
+                    this.simulation.overviewHeight = this.simulation.calculateOverviewHeightForAllCreatures();
+                }
             } else {
-                // Turn on follow leader, turn off overview
+                // Turn on follow leader
                 this.simulation.followLeader = true;
-                this.simulation.overviewMode = false;
-                this.simulation.setCameraMode('follow');
+                this.simulation.lastFollowedCreature = null;
+                this.simulation.camera.up.set(0, 1, 0);
+                // If in overview mode, zoom in based on creature size
+                if (this.simulation.overviewMode) {
+                    const toFollow = this.simulation.selectedCreature || this.simulation.currentBestCreature;
+                    if (toFollow) {
+                        this.simulation.overviewHeight = this.simulation.calculateCameraDistanceForCreature(toFollow);
+                    } else {
+                        this.simulation.overviewHeight = 15;
+                    }
+                    this.simulation.overviewPanOffset.set(0, 0, 0);
+                }
             }
             this.updateCameraButtonStates();
         });
         
         document.getElementById('cam-overview').addEventListener('click', () => {
-            // Toggle overview mode on/off
+            // Toggle overview mode on/off (independent of follow mode)
             if (this.simulation.overviewMode) {
                 // Turn off overview, return to normal perspective
                 this.simulation.overviewMode = false;
-                this.simulation.setCameraMode('follow');
                 this.simulation.returnFromOverview();
             } else {
-                // Turn on overview, turn off follow leader
-                this.simulation.overviewMode = true;
-                this.simulation.followLeader = false;
+                // Turn on overview
                 this.simulation.setCameraMode('overview');
             }
             this.updateCameraButtonStates();
@@ -291,12 +371,12 @@ class Application {
         });
         
         document.getElementById('close-tree-modal').addEventListener('click', () => {
-            document.getElementById('evolution-tree-modal').classList.remove('active');
+            this.closeEvolutionTree();
         });
         
         document.getElementById('evolution-tree-modal').addEventListener('click', (e) => {
             if (e.target === document.getElementById('evolution-tree-modal')) {
-                document.getElementById('evolution-tree-modal').classList.remove('active');
+                this.closeEvolutionTree();
             }
         });
         
@@ -314,21 +394,19 @@ class Application {
             }
         });
         
-        // Tree display mode toggle (cycles: full -> lineage -> champions -> species -> full)
+        // Tree display mode toggle (cycles: champions -> species -> champions)
         document.getElementById('tree-toggle-mode').addEventListener('click', () => {
             if (this.treeRenderer) {
                 const newMode = this.treeRenderer.toggleDisplayMode();
-                // Update button text to show what clicking will switch TO
+                // Update button text to show CURRENT mode (what you're viewing now)
                 const btn = document.getElementById('tree-toggle-mode');
-                if (newMode === 'full') {
-                    btn.textContent = '\u{1F500} Lineage Only';
-                } else if (newMode === 'lineage') {
+                if (newMode === 'champions') {
                     btn.textContent = '\u{1F451} Champions Only';
-                } else if (newMode === 'champions') {
-                    btn.textContent = '\u{1F9EC} Species View';
+                    btn.title = 'Click to switch to Species View';
                 } else {
-                    // species mode - next is full
-                    btn.textContent = '\u{1F4CB} Full View';
+                    // species mode
+                    btn.textContent = '\u{1F9EC} Species View';
+                    btn.title = 'Click to switch to Champions Only';
                 }
             }
         });
@@ -472,10 +550,84 @@ class Application {
             this.simulation.setGravity(percent / 100);
         });
         
+        // Per-sensor mode dropdowns - each sensor can be Off/Start/Evolve
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        for (const type of sensorTypes) {
+            const selectEl = document.getElementById(`sensor-${type}`);
+            if (selectEl) {
+                selectEl.addEventListener('change', (e) => {
+                    if (typeof SensorConfig !== 'undefined') {
+                        SensorConfig.setSensorMode(type, e.target.value);
+                    }
+                    this.updateSensorDescription();
+                });
+            }
+        }
+        
+        // Initialize sensor UI state
+        this.updateSensorDescription();
+        
+        // Initialize sensor modes from HTML dropdown defaults
+        // This ensures SensorConfig matches the HTML even before Start is clicked
+        if (typeof SensorConfig !== 'undefined') {
+            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+            for (const type of sensorTypes) {
+                const selectEl = document.getElementById(`sensor-${type}`);
+                if (selectEl) {
+                    SensorConfig.setSensorMode(type, selectEl.value);
+                }
+            }
+        }
+        
+        // Initialize sudden death mode from checkbox state
+        // (checkbox may be checked by default in HTML)
+        const initialSuddenDeath = document.getElementById('sudden-death-toggle').checked;
+        if (initialSuddenDeath) {
+            this.simulation.setSuddenDeathMode(true);
+            const desc = document.getElementById('sudden-death-desc');
+            desc.textContent = 'ACTIVE - Worst 75% eliminated!';
+            desc.style.color = '#ff6666';
+        }
+        
         // Set up callback so simulation can notify us when camera mode changes (e.g., from panning)
         this.simulation.onFollowLeaderChanged = () => {
             this.updateCameraButtonStates();
         };
+    }
+    
+    /**
+     * Update the sensor description text based on current per-sensor settings.
+     * Shows counts of sensors in each mode (Start/Evolve).
+     */
+    updateSensorDescription() {
+        const descEl = document.getElementById('sensor-description');
+        if (!descEl) return;
+        
+        // Read mode from each sensor dropdown
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        let startCount = 0;
+        let evolveCount = 0;
+        
+        for (const type of sensorTypes) {
+            const selectEl = document.getElementById(`sensor-${type}`);
+            if (selectEl) {
+                const mode = selectEl.value;
+                if (mode === 'start') startCount++;
+                else if (mode === 'evolve') evolveCount++;
+            }
+        }
+        
+        // Build description string
+        if (startCount === 0 && evolveCount === 0) {
+            descEl.textContent = 'All off';
+            descEl.style.color = '#888';
+        } else {
+            const parts = [];
+            if (startCount > 0) parts.push(`${startCount} start`);
+            if (evolveCount > 0) parts.push(`${evolveCount} evolve`);
+            descEl.textContent = parts.join(', ');
+            descEl.style.color = '#64ffda';
+        }
     }
     
     /**
@@ -530,6 +682,19 @@ class Application {
         const roundDuration = parseInt(document.getElementById('round-duration-input').value) || 60;
         const gravityPercent = parseInt(document.getElementById('gravity-slider').value) || 100;
         
+        // Configure sensor settings from per-sensor dropdowns
+        if (typeof SensorConfig !== 'undefined') {
+            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+            for (const type of sensorTypes) {
+                const selectEl = document.getElementById(`sensor-${type}`);
+                if (selectEl) {
+                    SensorConfig.setSensorMode(type, selectEl.value);
+                }
+            }
+            console.log('[START] Sensor config - Start:', SensorConfig.getStartTypes().join(', ') || 'none',
+                        '| Evolve:', SensorConfig.getEvolveTypes().join(', ') || 'none');
+        }
+        
         // Set round duration in simulation
         this.simulation.setMaxTime(roundDuration);
         
@@ -570,6 +735,13 @@ class Application {
         document.getElementById('random-blocks-checkbox').disabled = true;
         document.getElementById('limb-gen-checkbox').disabled = true;
         document.getElementById('round-duration-input').disabled = true;
+        
+        // Disable sensor dropdowns during evolution
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        for (const type of sensorTypes) {
+            const selectEl = document.getElementById(`sensor-${type}`);
+            if (selectEl) selectEl.disabled = true;
+        }
     }
     
     evaluateGeneration() {
@@ -608,14 +780,15 @@ class Application {
         console.log(`Fitness mode: ${activeMode}`);
         console.log(`Population size: ${this.evolution.population.length}`);
         
-        // Find best creature using current fitness mode
+        // Calculate fitness for all creatures (handles outcast mode properly)
+        this.calculateFitnessForCreatures(this.evolution.population, activeMode);
+        
+        // Find best creature
         let bestCreature = this.evolution.population[0];
-        bestCreature.calculateFitness(activeMode);
         
         // Log all creatures for debugging
         console.log(`Evaluating all creatures:`);
         for (let creature of this.evolution.population) {
-            creature.calculateFitness(activeMode);
             const marker = creature.isDefendingChampion ? ' [DEFENDING]' : '';
             console.log(`  ${creature.name}: ${creature.blocks.length} blocks, fitness=${creature.fitness.toFixed(2)}${marker}`);
             if (creature.fitness > bestCreature.fitness) {
@@ -731,6 +904,76 @@ class Application {
     }
     
     /**
+     * Calculate fitness for a set of creatures.
+     * For outcast mode, this requires population-level analysis.
+     * For other modes, fitness is calculated individually.
+     * 
+     * @param {Array} creatures - Array of creatures to calculate fitness for
+     * @param {string} mode - The fitness mode to use
+     */
+    calculateFitnessForCreatures(creatures, mode) {
+        if (!creatures || creatures.length === 0) return;
+        
+        if (mode === 'outcast') {
+            // Outcast mode requires population-level analysis
+            // We need to find the average across all creatures, then score by deviation
+            
+            // First pass: gather metrics and find ranges for normalization
+            const metrics = creatures.map(creature => {
+                const tilesCount = creature.tilesLit ? creature.tilesLit.length : 0;
+                return {
+                    creature: creature,
+                    distance: creature.maxDistance || 0,
+                    height: creature.maxHeight || 0,
+                    tiles: tilesCount,
+                    jump: creature.maxJumpHeight || 0
+                };
+            });
+            
+            // Find max values for normalization (avoid division by zero)
+            const maxDistance = Math.max(0.001, ...metrics.map(m => m.distance));
+            const maxHeight = Math.max(0.001, ...metrics.map(m => m.height));
+            const maxTiles = Math.max(1, ...metrics.map(m => m.tiles));
+            const maxJump = Math.max(0.001, ...metrics.map(m => m.jump));
+            
+            // Calculate population averages (normalized 0-1)
+            let avgDistance = 0, avgHeight = 0, avgTiles = 0, avgJump = 0;
+            for (let m of metrics) {
+                avgDistance += m.distance / maxDistance;
+                avgHeight += m.height / maxHeight;
+                avgTiles += m.tiles / maxTiles;
+                avgJump += m.jump / maxJump;
+            }
+            const count = metrics.length;
+            avgDistance /= count;
+            avgHeight /= count;
+            avgTiles /= count;
+            avgJump /= count;
+            
+            // Second pass: calculate outcast score (deviation from average)
+            for (let m of metrics) {
+                const normDist = m.distance / maxDistance;
+                const normHeight = m.height / maxHeight;
+                const normTiles = m.tiles / maxTiles;
+                const normJump = m.jump / maxJump;
+                
+                const devDist = Math.abs(normDist - avgDistance);
+                const devHeight = Math.abs(normHeight - avgHeight);
+                const devTiles = Math.abs(normTiles - avgTiles);
+                const devJump = Math.abs(normJump - avgJump);
+                
+                // Total deviation = outcast score
+                m.creature.fitness = (devDist + devHeight + devTiles + devJump) * 100;
+            }
+        } else {
+            // Standard fitness modes - calculate individually
+            for (let creature of creatures) {
+                creature.calculateFitness(mode);
+            }
+        }
+    }
+    
+    /**
      * Show the tournament leaderboard panel on the right side
      */
     showTournamentLeaderboard() {
@@ -754,16 +997,18 @@ class Application {
         
         const activeMode = this.simulation.fitnessMode;
         
-        // Calculate current fitness for all tournament creatures
+        // Get all tournament creatures and calculate their fitness
+        const creatures = this.tournamentChampions.map(entry => entry.creature);
+        this.calculateFitnessForCreatures(creatures, activeMode);
+        
+        // Build rankings from the calculated fitness values
         const rankings = [];
         for (let entry of this.tournamentChampions) {
-            const creature = entry.creature;
-            creature.calculateFitness(activeMode);
             rankings.push({
-                name: creature.name,
+                name: entry.creature.name,
                 generation: entry.nodeData.generation,
-                fitness: creature.fitness,
-                creature: creature
+                fitness: entry.creature.fitness,
+                creature: entry.creature
             });
         }
         
@@ -817,14 +1062,17 @@ class Application {
         // Get the tournament fitness mode
         const tournamentMode = this.simulation.fitnessMode;
         
-        // Find the winner - calculate fitness for all tournament creatures
+        // Calculate fitness for all tournament creatures (handles outcast mode properly)
+        const creatures = this.tournamentChampions.map(entry => entry.creature);
+        this.calculateFitnessForCreatures(creatures, tournamentMode);
+        
+        // Find the winner from calculated fitness values
         let winner = null;
         let winnerFitness = -Infinity;
         let results = [];
         
         for (let championEntry of this.tournamentChampions) {
             const creature = championEntry.creature;
-            creature.calculateFitness(tournamentMode);
             
             results.push({
                 name: creature.name,
@@ -1563,10 +1811,11 @@ class Application {
         let bestCreature = null;
         let bestFitness = -Infinity;
         
-        if (this.simulation.activeCreatures) {
+        if (this.simulation.activeCreatures && this.simulation.activeCreatures.length > 0) {
+            // Calculate fitness for all creatures (handles outcast mode properly)
+            this.calculateFitnessForCreatures(this.simulation.activeCreatures, activeMode);
+            
             for (let creature of this.simulation.activeCreatures) {
-                // Calculate fitness using current active mode
-                creature.calculateFitness(activeMode);
                 if (creature.fitness > bestFitness) {
                     bestFitness = creature.fitness;
                     bestCreature = creature;
@@ -1685,6 +1934,13 @@ class Application {
     }
     
     showEvolutionTree() {
+        // Pause the simulation while viewing the tree so we don't miss anything
+        this.pausedBeforeTreeOpen = this.simulation.isPaused;
+        if (!this.simulation.isPaused) {
+            this.simulation.pause();
+            document.getElementById('pause-btn').textContent = '\u25B6 Resume';
+        }
+        
         const treeData = this.evolution.getEvolutionTreeData();
         const container = document.getElementById('tree-canvas-container');
         
@@ -1763,6 +2019,19 @@ class Application {
     }
     
     /**
+     * Close the evolution tree modal and restore pause state
+     */
+    closeEvolutionTree() {
+        document.getElementById('evolution-tree-modal').classList.remove('active');
+        
+        // Restore the pause state from before opening the tree
+        if (!this.pausedBeforeTreeOpen && this.simulation.isPaused) {
+            this.simulation.resume();
+            document.getElementById('pause-btn').textContent = '\u23F8 Pause';
+        }
+    }
+    
+    /**
      * Handle click on an evolution tree node
      * Shows a confirmation dialog and spawns a new generation from the selected creature
      * 
@@ -1826,9 +2095,9 @@ class Application {
         message += `Blocks: ${nodeInfo.blocks}\n`;
         message += `Original Fitness: ${nodeInfo.fitness.toFixed(2)} (${nodeInfo.fitnessMode || 'N/A'} mode)\n\n`;
         message += `This will:\n`;
-        message += `â€¢ Stop the current evolution round\n`;
-        message += `â€¢ Set this creature as the new champion\n`;
-        message += `â€¢ Continue evolution from Generation ${targetGen}\n`;
+        message += `- Stop the current evolution round\n`;
+        message += `- Set this creature as the new champion\n`;
+        message += `- Continue evolution from Generation ${targetGen}\n`;
         message += `  (currently at Generation ${currentGen})\n\n`;
         message += `Continue?`;
         
@@ -1936,9 +2205,11 @@ class Application {
         let bestCreature = null;
         let bestFitness = -Infinity;
         
-        if (this.simulation.activeCreatures) {
+        if (this.simulation.activeCreatures && this.simulation.activeCreatures.length > 0) {
+            // Calculate fitness for all creatures (handles outcast mode properly)
+            this.calculateFitnessForCreatures(this.simulation.activeCreatures, activeMode);
+            
             for (let creature of this.simulation.activeCreatures) {
-                creature.calculateFitness(activeMode);
                 if (creature.fitness > bestFitness) {
                     bestFitness = creature.fitness;
                     bestCreature = creature;

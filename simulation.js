@@ -17,7 +17,7 @@ class Simulation {
         this.fixedTimeStep = 1.0 / 60.0;
         this.maxSubSteps = 3;
         
-        // Gravity settings - base value is Earth gravity (9.82 m/sÃ‚Â²)
+        // Gravity settings - base value is Earth gravity (9.82 m/s^2)
         // Multiplier can be adjusted from 0.1 (10%) to 2.0 (200%)
         this.baseGravity = 9.82;
         this.gravityMultiplier = 1.0;
@@ -33,9 +33,11 @@ class Simulation {
         this.mousePosition = null;
         
         // Camera control state - using boolean flags for different modes
-        this.cameraDistance = 40;
+        this.cameraDistance = 15;
+        this.targetCameraDistance = 15;  // For smooth distance transitions
+        this.userOverrideZoom = false;   // True when user has manually zoomed
         this.cameraRotationX = 0;
-        this.cameraRotationY = Math.PI / 6;
+        this.cameraRotationY = 0.15;  // ~8 degrees - very low angle to see horizon/sky
         
         this.overviewMode = false;
         this.overviewHeight = 120;
@@ -50,6 +52,20 @@ class Simulation {
         this.cameraSmoothTime = 0.4;
         this.followLeader = true;
         this.lastFollowedCreature = null;
+        
+        // Camera transition state for ease-in effect when switching targets
+        // Transition progress goes from 0 (just started) to 1 (complete)
+        this.cameraTransitionProgress = 1.0;  // Start at 1 = no transition
+        this.cameraTransitionDuration = 0.8;  // How long the ease-in period lasts (seconds)
+        this.previousTargetPosition = null;   // Where camera was looking before switch
+        
+        // Minimum height for camera - prevents going below ground plane
+        this.cameraMinHeight = 1.0;
+        
+        // Pan offset for overview+follow mode - lets user pan while still following
+        // This offset is added to the followed creature's position
+        // It gradually decays back to zero so camera re-centers on the target
+        this.overviewPanOffset = new THREE.Vector3(0, 0, 0);
         
         this.mouseDown = false;
         this.mouseButton = 0;
@@ -95,6 +111,7 @@ class Simulation {
         // Store lighting references for day/night cycle
         this.ambientLight = null;
         this.sunLight = null;
+        this.moonLight = null;  // Blue ambient light for nighttime
         this.hemiLight = null;
         this.fillLight = null;
         
@@ -103,8 +120,14 @@ class Simulation {
         this.overrideDayProgress = -1;
         
         // Visual sky elements
-        this.sunMesh = null;      // Visible sun in the sky
-        this.clouds = [];         // Array of cloud meshes
+        this.sunMesh = null;         // Visible sun in the sky
+        this.clouds = [];            // Array of cloud meshes
+        this.skyDome = null;         // Day sky dome that fades to reveal stars
+        this.innerStarSphere = null; // Inner star sphere (dimmer parallax layer)
+        this.innerStarGroup = null;  // Parent group for inner star sphere (tilted)
+        this.outerStarSphere = null; // Outer star sphere (main stars)
+        this.outerStarGroup = null;  // Parent group for outer star sphere (tilted)
+        this.starTexture = null;     // Night sky texture
         
         this.camera = new THREE.PerspectiveCamera(
             60, window.innerWidth / window.innerHeight, 0.1, 1000
@@ -146,6 +169,12 @@ class Simulation {
         this.fillLight.position.set(-30, 40, -30);
         this.scene.add(this.fillLight);
         
+        // Moon light - blue ambient light for nighttime illumination
+        // Active when sun is below horizon, provides soft blue glow
+        this.moonLight = new THREE.AmbientLight(0x4466aa, 0.15);
+        this.moonLight.visible = true;  // Starts visible (night at beginning)
+        this.scene.add(this.moonLight);
+        
         // Create visual sky elements (sun and clouds)
         this.createSkyElements();
         
@@ -175,9 +204,177 @@ class Simulation {
     }
     
     /**
-     * Create visual sky elements - sun and clouds
+     * Create visual sky elements - sun, clouds, and night sky
      */
     createSkyElements() {
+        // Create dual star spheres for parallax effect
+        // Both use additive blending so dark = invisible, bright = visible
+        // Inner sphere is dimmer to create depth
+        
+        // Outer star sphere (behind, rotates slower for parallax)
+        // Use a parent group tilted so poles are at horizon, then rotate sphere inside
+        const outerStarGeometry = new THREE.SphereGeometry(480, 64, 32);
+        const outerStarMaterial = new THREE.MeshBasicMaterial({
+            side: THREE.BackSide,
+            fog: false,
+            color: 0xffffff,
+            transparent: true,
+            opacity: 1.0,
+            blending: THREE.AdditiveBlending,
+        });
+        this.outerStarSphere = new THREE.Mesh(outerStarGeometry, outerStarMaterial);
+        // Create parent group tilted 90 degrees so sphere poles are at front/back
+        // Lower the group so the poles (pinched texture) are below ground level
+        this.outerStarGroup = new THREE.Group();
+        this.outerStarGroup.rotation.x = Math.PI / 2;
+        this.outerStarGroup.position.y = -150;  // Lower so poles are hidden below ground
+        this.outerStarGroup.add(this.outerStarSphere);
+        this.scene.add(this.outerStarGroup);
+        
+        // Inner star sphere (closer, dimmer, rotates at different speed)
+        const innerStarGeometry = new THREE.SphereGeometry(450, 64, 32);
+        const innerStarMaterial = new THREE.MeshBasicMaterial({
+            side: THREE.BackSide,
+            fog: false,
+            color: new THREE.Color(2.5, 2.5, 2.5),  // Multiply texture brightness
+            transparent: true,
+            opacity: 0.4,  // Dimmer layer
+            blending: THREE.AdditiveBlending,
+        });
+        this.innerStarSphere = new THREE.Mesh(innerStarGeometry, innerStarMaterial);
+        // Same parent group setup - lowered to hide poles
+        this.innerStarGroup = new THREE.Group();
+        this.innerStarGroup.rotation.x = Math.PI / 2;
+        this.innerStarGroup.position.y = -150;  // Lower so poles are hidden below ground
+        this.innerStarGroup.add(this.innerStarSphere);
+        this.scene.add(this.innerStarGroup);
+        
+        // Create a procedural star texture as fallback
+        const createProceduralStarTexture = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2048;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            
+            // Black background
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw random stars of varying sizes and brightness
+            const starCount = 3000;
+            for (let i = 0; i < starCount; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                const brightness = Math.random();
+                const size = Math.random() * 2 + 0.5;
+                
+                // Star color varies from white to slightly blue/yellow
+                const colorVariation = Math.random();
+                let r, g, b;
+                if (colorVariation < 0.7) {
+                    // White/blue stars (most common)
+                    r = 200 + Math.floor(brightness * 55);
+                    g = 200 + Math.floor(brightness * 55);
+                    b = 220 + Math.floor(brightness * 35);
+                } else if (colorVariation < 0.9) {
+                    // Warm yellow/orange stars
+                    r = 255;
+                    g = 200 + Math.floor(brightness * 40);
+                    b = 150 + Math.floor(brightness * 50);
+                } else {
+                    // Bright blue stars (rare)
+                    r = 180 + Math.floor(brightness * 40);
+                    g = 200 + Math.floor(brightness * 55);
+                    b = 255;
+                }
+                
+                ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.3 + brightness * 0.7})`;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Add glow to brighter stars
+                if (brightness > 0.7 && size > 1) {
+                    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${brightness * 0.2})`;
+                    ctx.beginPath();
+                    ctx.arc(x, y, size * 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            
+            // Add a few nebula-like regions for visual interest
+            for (let i = 0; i < 5; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                const gradient = ctx.createRadialGradient(x, y, 0, x, y, 100 + Math.random() * 100);
+                const hue = Math.random() * 60 + 200; // Blue to purple range
+                gradient.addColorStop(0, `hsla(${hue}, 50%, 30%, 0.15)`);
+                gradient.addColorStop(0.5, `hsla(${hue}, 40%, 20%, 0.08)`);
+                gradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(x - 200, y - 200, 400, 400);
+            }
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            return texture;
+        };
+        
+        // Try to load external texture, fall back to procedural
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load('stars.jpg', (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            this.starTexture = texture;
+            
+            // Apply to outer sphere
+            outerStarMaterial.map = texture;
+            outerStarMaterial.needsUpdate = true;
+            
+            // Clone texture for inner sphere with offset
+            const innerTexture = texture.clone();
+            innerTexture.wrapS = THREE.RepeatWrapping;
+            innerTexture.wrapT = THREE.RepeatWrapping;
+            innerTexture.offset.set(0.5, 0.0);  // Offset by half so stars don't overlap
+            innerTexture.needsUpdate = true;
+            innerStarMaterial.map = innerTexture;
+            innerStarMaterial.needsUpdate = true;
+            
+            console.log('Night sky texture loaded (dual parallax spheres)');
+        }, undefined, (error) => {
+            // Create procedural star texture as fallback
+            console.log('Using procedural star texture (stars.jpg not found)');
+            const proceduralTexture = createProceduralStarTexture();
+            this.starTexture = proceduralTexture;
+            
+            // Apply to outer sphere
+            outerStarMaterial.map = proceduralTexture;
+            outerStarMaterial.needsUpdate = true;
+            
+            // Create second procedural texture with different seed for inner sphere
+            const innerTexture = createProceduralStarTexture();
+            innerTexture.offset.set(0.3, 0.15);  // Offset so stars don't overlap
+            innerStarMaterial.map = innerTexture;
+            innerStarMaterial.needsUpdate = true;
+        });
+        
+        // Black background behind the star spheres
+        this.scene.background = new THREE.Color(0x000000);
+        
+        // Create a sky dome - a large inverted sphere with the day sky color
+        // This fades in during the day to cover the stars, and fades out at night
+        // Centered at same Y position as star spheres, with smaller radius to fit inside
+        const skyGeometry = new THREE.SphereGeometry(420, 32, 32);  // Smaller than inner star sphere (450)
+        const skyMaterial = new THREE.MeshBasicMaterial({
+            color: 0x87ceeb,        // Sky blue - will be updated by day/night cycle
+            side: THREE.BackSide,   // Render on inside of sphere
+            fog: false,
+            transparent: true,
+            opacity: 1.0,           // Will be controlled by day/night cycle
+        });
+        this.skyDome = new THREE.Mesh(skyGeometry, skyMaterial);
+        this.skyDome.position.y = -150;  // Match star sphere center position
+        this.scene.add(this.skyDome);
+        
         // Create the sun - a glowing sphere in the sky
         const sunGeometry = new THREE.SphereGeometry(8, 32, 32);
         const sunMaterial = new THREE.MeshBasicMaterial({
@@ -305,7 +502,7 @@ class Simulation {
         }
         
         const percentDisplay = Math.round(this.gravityMultiplier * 100);
-        console.log(`Gravity set to ${percentDisplay}% (${Math.abs(gravityValue).toFixed(2)} m/sÃ‚Â²)`);
+        console.log(`Gravity set to ${percentDisplay}% (${Math.abs(gravityValue).toFixed(2)} m/s^2)`);
     }
     
     /**
@@ -331,18 +528,95 @@ class Simulation {
             ? this.overrideDayProgress 
             : this.timeElapsed / this.maxTime;
         
-        // Sun angle: starts at horizon (east), arcs to zenith, sets at horizon (west)
-        // Using sine wave to create smooth arc across sky
-        const sunAngle = dayProgress * Math.PI; // 0 to PI (180 degrees)
-        const sunHeight = Math.sin(sunAngle) * 120; // Height: 0 -> 120 -> 0
-        const sunX = Math.cos(sunAngle * 2 - Math.PI) * 100; // East to West
+        // Sun position - rises in east, arcs through southern sky, sets in west
+        // Rotates in same direction as star spheres (east to west)
+        //
+        // Timing: Dawn light begins BEFORE sunrise, dusk light continues AFTER sunset
+        // This matches real-world behavior where sky lightens/darkens gradually
+        //
+        // Lighting phases (existing):
+        //   0.0-0.15:  pre-dawn (dark, starting to lighten)
+        //   0.15-0.35: dawn/morning (sky brightening)
+        //   0.35-0.65: midday (full daylight)
+        //   0.65-0.85: evening/dusk (sky darkening)
+        //   0.85-1.0:  post-dusk (dark)
+        //
+        // Sun timing (adjusted to lag behind lighting):
+        //   0.20: sunrise (sun breaks horizon AFTER sky starts lightening)
+        //   0.50: noon (sun at peak)
+        //   0.80: sunset (sun sets BEFORE sky goes fully dark)
+        //
+        // Map dayProgress to sun angle:
+        //   progress 0.20 -> angle 0 deg (sunrise, horizon east)
+        //   progress 0.50 -> angle 90 deg (noon, zenith)
+        //   progress 0.80 -> angle 180 deg (sunset, horizon west)
         
-        // Update sun light position
-        this.sunLight.position.set(sunX, Math.max(20, sunHeight), 50);
+        const sunAngle = ((dayProgress - 0.20) / 0.60) * Math.PI;
         
-        // Update visible sun mesh position (further away and scaled for perspective)
+        // Sun orbit parameters
+        const orbitRadius = 300;  // East-west travel distance
+        const maxHeight = 200;    // Peak height at noon
+        const southOffset = 80;   // Sun stays in southern sky
+        
+        // Calculate sun position
+        // Negate X so sun rotates same direction as star spheres (east to west)
+        // sin gives 0 at horizons, 1 at noon for height
+        // cos gives 1 at sunrise, -1 at sunset - negate to match star rotation direction
+        const sunX = -Math.cos(sunAngle) * orbitRadius;
+        const sunY = Math.sin(sunAngle) * maxHeight;
+        const sunZ = southOffset;
+        
+        // Update directional light position to match sun mesh exactly
+        // This ensures shadows are cast from the correct direction
+        this.sunLight.position.set(sunX, sunY, sunZ);
+        
+        // Update visible sun mesh
+        // Sun appears larger at horizon due to atmospheric effect
+        // horizonFactor is 1 at horizons, 0 at noon
+        const horizonFactor = 1 - Math.abs(Math.sin(sunAngle));
+        const sunScale = 1 + horizonFactor * 0.5;
+        const sunRadius = 8 * sunScale;
+        
         if (this.sunMesh) {
-            this.sunMesh.position.set(sunX * 3, Math.max(60, sunHeight * 2.5), 150);
+            this.sunMesh.position.set(sunX, sunY, sunZ);
+            this.sunMesh.scale.setScalar(sunScale);
+            
+            // Only hide sun when completely below ground plane
+            this.sunMesh.visible = (sunY > -sunRadius);
+        }
+        
+        // Toggle sun light and moon light based on whether any part of sun is above horizon
+        // Sun light turns on when top edge of sun crests horizon (sunY > -sunRadius)
+        // Sun light turns off when bottom edge of sun drops below horizon (sunY <= -sunRadius)
+        // Moon light provides blue ambient glow only when sun is completely below horizon
+        const sunVisible = sunY > -sunRadius;
+        
+        if (sunVisible) {
+            // Daytime: sun casts light and shadows, moonlight off
+            this.sunLight.visible = true;
+            this.sunLight.castShadow = true;
+            if (this.moonLight) {
+                this.moonLight.visible = false;
+            }
+        } else {
+            // Nighttime: no sun light, moonlight provides ambient blue glow
+            this.sunLight.visible = false;
+            this.sunLight.castShadow = false;
+            if (this.moonLight) {
+                this.moonLight.visible = true;
+            }
+        }
+        
+        // Rotate star spheres with day cycle (tied to Earth's rotation like the sun)
+        // Spheres are inside groups tilted 90 degrees on X, so rotating on Y creates horizontal motion
+        // Negative rotation to match sun's east-to-west movement
+        const starRotation = dayProgress * Math.PI * 2;  // Full rotation over a day
+        if (this.innerStarSphere) {
+            this.innerStarSphere.rotation.y = -starRotation;
+        }
+        if (this.outerStarSphere) {
+            // Outer sphere rotates 15% slower for noticeable parallax
+            this.outerStarSphere.rotation.y = -starRotation * 0.85;
         }
         
         // Calculate lighting based on sun height
@@ -426,28 +700,51 @@ class Simulation {
         }
         
         // Apply lighting changes
-        this.scene.background.setHex(skyColor);
         this.scene.fog.color.setHex(fogColor);
         this.sunLight.color.setHex(sunColor);
         this.sunLight.intensity = sunIntensity;
         this.ambientLight.intensity = ambientIntensity;
         this.hemiLight.intensity = hemiIntensity;
         
-        // Update sun mesh appearance
+        // Update sky dome color and opacity
+        // The dome covers the star background - opaque during day, transparent at night
+        if (this.skyDome && this.skyDome.material) {
+            this.skyDome.material.color.setHex(skyColor);
+            
+            // Calculate sky dome opacity (inverse of star visibility)
+            // Stars visible at night means dome should be transparent
+            let domeOpacity;
+            
+            if (dayProgress < 0.15) {
+                // Early dawn - stars fully visible, dome transparent
+                domeOpacity = 0.0;
+            } else if (dayProgress < 0.35) {
+                // Sunrise - dome fades in to cover stars
+                const t = (dayProgress - 0.15) / 0.2;
+                domeOpacity = t;
+            } else if (dayProgress < 0.65) {
+                // Midday - dome fully opaque, no stars visible
+                domeOpacity = 1.0;
+            } else if (dayProgress < 0.85) {
+                // Sunset - dome fades out to reveal stars
+                const t = (dayProgress - 0.65) / 0.2;
+                domeOpacity = 1.0 - t;
+            } else {
+                // Late dusk - stars fully visible, dome transparent
+                domeOpacity = 0.0;
+            }
+            
+            this.skyDome.material.opacity = domeOpacity;
+        } else {
+            // Fallback if skyDome not ready - update scene.background as color
+            if (this.scene.background && this.scene.background.isColor) {
+                this.scene.background.setHex(skyColor);
+            }
+        }
+        
+        // Update sun mesh color based on time of day
         if (this.sunMesh) {
             this.sunMesh.material.color.setHex(sunMeshColor);
-            
-            // Make sun larger and more visible at horizon (sunrise/sunset)
-            const horizonFactor = 1 - Math.abs(dayProgress - 0.5) * 2; // 1 at edges, 0 at noon
-            const sunScale = 1 + horizonFactor * 0.5; // Bigger at horizon
-            this.sunMesh.scale.setScalar(sunScale);
-            
-            // Fade sun below horizon
-            if (sunHeight < 30) {
-                this.sunMesh.visible = false;
-            } else {
-                this.sunMesh.visible = true;
-            }
         }
         
         // Update hemisphere light colors to match time of day
@@ -472,19 +769,49 @@ class Simulation {
     }
     
     createGround() {
+        // Create a small tileable grid texture representing 5x5 world units
+        // Contains all grid detail levels and repeats many times across the ground
+        const tilePixels = 256;
         this.groundCanvas = document.createElement('canvas');
-        this.groundCanvas.width = this.tileResolution;
-        this.groundCanvas.height = this.tileResolution;
+        this.groundCanvas.width = tilePixels;
+        this.groundCanvas.height = tilePixels;
         this.groundCtx = this.groundCanvas.getContext('2d');
         
-        this.drawGroundGrid();
+        this.drawGroundGrid(tilePixels);
         
         this.groundTexture = new THREE.CanvasTexture(this.groundCanvas);
-        this.groundTexture.magFilter = THREE.NearestFilter;
-        this.groundTexture.minFilter = THREE.LinearFilter;
+        this.groundTexture.magFilter = THREE.LinearFilter;
+        this.groundTexture.minFilter = THREE.LinearMipmapLinearFilter;
+        this.groundTexture.wrapS = THREE.RepeatWrapping;
+        this.groundTexture.wrapT = THREE.RepeatWrapping;
         
+        // Each tile represents 5 world units, calculate repeats for doubled ground
+        const worldUnitsPerTile = 5;
+        const groundWorldSize = this.groundSize * 2;  // 400 units
+        const repeatCount = groundWorldSize / worldUnitsPerTile;  // 80 repeats
+        this.groundTexture.repeat.set(repeatCount, repeatCount);
+        
+        // Create horizon plane - a circular plane that extends to the inner star sphere
+        // Sits at ground level (y=0) to hide star sphere pinching at the horizon
+        // Uses a slightly darker green to differentiate from main arena
+        // Inner star sphere radius=450, center at y=-150, so at y=0 it intersects at:
+        // radius = sqrt(450^2 - 150^2) = sqrt(180000) ~= 424 units
+        const horizonRadius = 425;  // Just past the star sphere intersection
+        const horizonMesh = new THREE.Mesh(
+            new THREE.CircleGeometry(horizonRadius, 64),  // 64 segments for smooth circle
+            new THREE.MeshLambertMaterial({ 
+                color: 0x2d4a1e,  // Darker green than main ground
+                side: THREE.DoubleSide 
+            })
+        );
+        horizonMesh.rotation.x = -Math.PI / 2;
+        horizonMesh.position.y = -0.1;  // Just below main ground to avoid z-fighting
+        horizonMesh.receiveShadow = false;  // No shadows needed on horizon
+        this.scene.add(horizonMesh);
+        
+        // Main ground plane with grid texture (doubled size)
         const groundMesh = new THREE.Mesh(
-            new THREE.PlaneGeometry(this.groundSize, this.groundSize),
+            new THREE.PlaneGeometry(this.groundSize * 2, this.groundSize * 2),
             new THREE.MeshLambertMaterial({ 
                 map: this.groundTexture,
                 side: THREE.DoubleSide 
@@ -506,58 +833,65 @@ class Simulation {
         this.ground = { mesh: groundMesh, body: groundBody };
     }
     
-    drawGroundGrid() {
+    /**
+     * Draw a tileable ground grid cell (5x5 world units)
+     * Grid levels to match the lit tile system (0.1 unit tiles):
+     * - Fine lines every 0.5 units (10 cells across tile)
+     * - Medium lines every 1 unit (5 cells across tile)
+     * - Major lines at edges (every 5 units = tile boundary)
+     */
+    drawGroundGrid(size) {
         const ctx = this.groundCtx;
-        const w = this.groundCanvas.width;
-        const h = this.groundCanvas.height;
         
+        // Base green color
         ctx.fillStyle = '#3d6428';
-        ctx.fillRect(0, 0, w, h);
+        ctx.fillRect(0, 0, size, size);
         
-        const pixelsPerUnit = w / this.groundSize;
-        const tileSize = 0.1;
-        const pixelsPerTile = pixelsPerUnit * tileSize;
+        // Pixels per world unit (tile represents 5 world units)
+        const pixelsPerUnit = size / 5;
         
-        ctx.strokeStyle = 'rgba(60, 90, 40, 0.4)';
-        ctx.lineWidth = 0.5;
-        for (let i = 0; i <= w; i += pixelsPerTile * 5) {
-            ctx.beginPath();
-            ctx.moveTo(i, 0);
-            ctx.lineTo(i, h);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(0, i);
-            ctx.lineTo(w, i);
-            ctx.stroke();
-        }
-        
-        ctx.strokeStyle = 'rgba(45, 75, 30, 0.6)';
+        // Fine grid lines every 0.5 units
+        ctx.strokeStyle = 'rgba(30, 50, 20, 0.7)';
         ctx.lineWidth = 1;
-        const majorGridPixels = pixelsPerUnit * 1;
-        for (let i = 0; i <= w; i += majorGridPixels) {
+        const fineGridPixels = pixelsPerUnit * 0.5;
+        for (let i = fineGridPixels; i < size; i += fineGridPixels) {
             ctx.beginPath();
             ctx.moveTo(i, 0);
-            ctx.lineTo(i, h);
+            ctx.lineTo(i, size);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(0, i);
-            ctx.lineTo(w, i);
+            ctx.lineTo(size, i);
             ctx.stroke();
         }
         
-        ctx.strokeStyle = 'rgba(30, 60, 20, 0.8)';
+        // Medium grid lines every 1 unit
+        ctx.strokeStyle = 'rgba(20, 40, 15, 0.85)';
         ctx.lineWidth = 2;
-        const majorGridPixels5 = pixelsPerUnit * 5;
-        for (let i = 0; i <= w; i += majorGridPixels5) {
+        const mediumGridPixels = pixelsPerUnit * 1;
+        for (let i = mediumGridPixels; i < size; i += mediumGridPixels) {
             ctx.beginPath();
             ctx.moveTo(i, 0);
-            ctx.lineTo(i, h);
+            ctx.lineTo(i, size);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(0, i);
-            ctx.lineTo(w, i);
+            ctx.lineTo(size, i);
             ctx.stroke();
         }
+        
+        // Major grid lines at tile edges (every 5 units)
+        // Draw on left and top edges so they connect when tiled
+        ctx.strokeStyle = 'rgba(15, 30, 10, 1.0)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, size);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(size, 0);
+        ctx.stroke();
     }
     
     initTileInstances() {
@@ -606,8 +940,11 @@ class Simulation {
         const tileZ = Math.floor(worldZ / this.tileWorldSize);
         const tileKey = `${tileX},${tileZ}`;
         
+        // Track tile for creature (array preserves visitation order)
         if (creature && creature.tilesLit) {
-            creature.tilesLit.add(tileKey);
+            if (!creature.tilesLit.includes(tileKey)) {
+                creature.tilesLit.push(tileKey);
+            }
         }
         
         if (this.litTiles.has(tileKey)) {
@@ -819,18 +1156,33 @@ class Simulation {
             return;
         }
         
-        let bestCreature = null;
-        let bestFitness = -Infinity;
+        // Filter to valid creatures (have bodies, not eliminated)
+        const validCreatures = this.activeCreatures.filter(c => 
+            c && c.bodies && c.bodies.length > 0 && 
+            (!this.eliminatedCreatures || !this.eliminatedCreatures.has(c))
+        );
         
-        for (let creature of this.activeCreatures) {
-            if (!creature.bodies || creature.bodies.length === 0) {
-                continue;
-            }
-            
-            creature.calculateFitness(this.fitnessMode);
-            if (creature.fitness > bestFitness) {
-                bestFitness = creature.fitness;
-                bestCreature = creature;
+        if (validCreatures.length === 0) {
+            this.crownGroup.visible = false;
+            this.currentBestCreature = null;
+            return;
+        }
+        
+        let bestCreature = null;
+        
+        // Outcast mode requires population-level analysis
+        if (this.fitnessMode === 'outcast') {
+            const result = this.calculateOutcastFitnessForPopulation(validCreatures);
+            bestCreature = result.bestCreature;
+        } else {
+            // Standard fitness modes - calculate individually
+            let bestFitness = -Infinity;
+            for (let creature of validCreatures) {
+                creature.calculateFitness(this.fitnessMode);
+                if (creature.fitness > bestFitness) {
+                    bestFitness = creature.fitness;
+                    bestCreature = creature;
+                }
             }
         }
         
@@ -846,8 +1198,118 @@ class Simulation {
         }
     }
     
+    /**
+     * Calculate outcast fitness for all active creatures.
+     * Outcast mode requires population-level analysis - we need to find the average
+     * of all creatures, then score each by how different they are from that average.
+     * 
+     * This sets the .fitness property on each creature in the provided array.
+     * 
+     * @param {Array} creatures - Array of creatures to calculate fitness for
+     * @returns {Object} Object with bestCreature and worstCreature references
+     */
+    calculateOutcastFitnessForPopulation(creatures) {
+        if (!creatures || creatures.length === 0) {
+            return { bestCreature: null, worstCreature: null };
+        }
+        
+        // First pass: gather all metrics and find ranges for normalization
+        const metrics = creatures.map(creature => {
+            const tilesCount = creature.tilesLit ? creature.tilesLit.length : 0;
+            return {
+                creature: creature,
+                distance: creature.maxDistance || 0,
+                height: creature.maxHeight || 0,
+                tiles: tilesCount,
+                jump: creature.maxJumpHeight || 0
+            };
+        });
+        
+        // Find max values for normalization (avoid division by zero)
+        const maxDistance = Math.max(0.001, ...metrics.map(m => m.distance));
+        const maxHeight = Math.max(0.001, ...metrics.map(m => m.height));
+        const maxTiles = Math.max(1, ...metrics.map(m => m.tiles));
+        const maxJump = Math.max(0.001, ...metrics.map(m => m.jump));
+        
+        // Calculate population averages (normalized 0-1)
+        let avgDistance = 0, avgHeight = 0, avgTiles = 0, avgJump = 0;
+        for (let m of metrics) {
+            avgDistance += m.distance / maxDistance;
+            avgHeight += m.height / maxHeight;
+            avgTiles += m.tiles / maxTiles;
+            avgJump += m.jump / maxJump;
+        }
+        const count = metrics.length;
+        avgDistance /= count;
+        avgHeight /= count;
+        avgTiles /= count;
+        avgJump /= count;
+        
+        // Second pass: calculate "outcast score" (deviation from average)
+        let bestCreature = null;
+        let worstCreature = null;
+        let bestFitness = -Infinity;
+        let worstFitness = Infinity;
+        
+        for (let m of metrics) {
+            // Normalize this creature's metrics
+            const normDist = m.distance / maxDistance;
+            const normHeight = m.height / maxHeight;
+            const normTiles = m.tiles / maxTiles;
+            const normJump = m.jump / maxJump;
+            
+            // Calculate absolute deviation from average for each metric
+            const devDist = Math.abs(normDist - avgDistance);
+            const devHeight = Math.abs(normHeight - avgHeight);
+            const devTiles = Math.abs(normTiles - avgTiles);
+            const devJump = Math.abs(normJump - avgJump);
+            
+            // Total deviation = outcast score (sum of all deviations)
+            // Scale up for more readable numbers
+            const outcastScore = (devDist + devHeight + devTiles + devJump) * 100;
+            
+            // Store the fitness on the creature
+            m.creature.fitness = outcastScore;
+            
+            // Track best and worst
+            if (outcastScore > bestFitness) {
+                bestFitness = outcastScore;
+                bestCreature = m.creature;
+            }
+            if (outcastScore < worstFitness) {
+                worstFitness = outcastScore;
+                worstCreature = m.creature;
+            }
+        }
+        
+        return { bestCreature, worstCreature };
+    }
+    
     spawnCreature(creature, startPosition = null) {
-        creature.startPosition = startPosition ? [...startPosition] : [...this.creatureStartPosition];
+        // Calculate the creature's bounding box to find lowest point
+        // This ensures creatures don't spawn intersecting the ground
+        let lowestPoint = Infinity;
+        for (const block of creature.blocks) {
+            // Block's lowest point = block center Y - half of block height
+            const blockBottom = block.position[1] - block.size[1] / 2;
+            if (blockBottom < lowestPoint) {
+                lowestPoint = blockBottom;
+            }
+        }
+        
+        // Calculate spawn height so the lowest block is just above ground
+        // lowestPoint is relative to creature origin, so we need to offset
+        // to make the absolute lowest point sit at groundClearance height
+        const groundClearance = 0.1;
+        const spawnHeight = groundClearance - lowestPoint;
+        
+        // Set start position with calculated Y to keep creature above ground
+        const basePosition = startPosition ? [...startPosition] : [...this.creatureStartPosition];
+        creature.startPosition = [
+            basePosition[0],
+            spawnHeight,
+            basePosition[2]
+        ];
         
         const creatureGroup = this.nextCreatureCollisionGroup;
         this.nextCreatureCollisionGroup = this.nextCreatureCollisionGroup << 1;
@@ -949,11 +1411,144 @@ class Simulation {
         } else {
             creature.maxDistance = 0;
             creature.maxHeight = 0;
-            creature.tilesLit = new Set();
+            creature.tilesLit = [];
             creature.maxJumpHeight = 0;
             creature.hasLandedAfterSpawn = false;
             creature.groundedY = 0;
         }
+        
+        // Initialize influence system - find blocks that provide influences
+        creature.influenceProviders = findInfluenceProviders(creature);
+        creature.influences = {};
+        
+        // Add visual indicators for influence-providing blocks
+        for (const provider of creature.influenceProviders) {
+            const mesh = creature.meshes[provider.blockIndex];
+            if (mesh) {
+                this.addInfluenceBlockVisual(mesh, provider.channelName);
+            }
+        }
+    }
+    
+    /**
+     * Add visual indicator to an influence-providing block.
+     * @param {THREE.Mesh} mesh - The block's mesh
+     * @param {string} influenceType - The type of influence ('gravity', 'light', etc.)
+     */
+    addInfluenceBlockVisual(mesh, influenceType) {
+        const config = getInfluenceVisualConfig(influenceType);
+        if (!config) return;
+        
+        // Store influence type on mesh for later updates
+        mesh.userData.influenceType = influenceType;
+        
+        if (influenceType === 'gravity') {
+            // Gravity sensor: small pendulum sphere that hangs "down"
+            const pendulumGeo = new THREE.SphereGeometry(0.12, 8, 8);
+            const pendulumMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.4
+            });
+            const pendulum = new THREE.Mesh(pendulumGeo, pendulumMat);
+            pendulum.position.y = -0.3;
+            mesh.add(pendulum);
+            mesh.userData.influenceVisual = pendulum;
+            
+        } else if (influenceType === 'light') {
+            // Light sensor: lens/eye on top that glows when facing sun
+            const lensGeo = new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+            const lensMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.3,
+                transparent: true,
+                opacity: 0.85
+            });
+            const lens = new THREE.Mesh(lensGeo, lensMat);
+            lens.position.y = 0.45;
+            mesh.add(lens);
+            mesh.userData.influenceVisual = lens;
+            
+        } else if (influenceType === 'velocity') {
+            // Velocity sensor: arrow/chevron pointing forward
+            // Uses a cone shape to suggest speed/direction
+            const arrowGeo = new THREE.ConeGeometry(0.1, 0.25, 4);
+            const arrowMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.4
+            });
+            const arrow = new THREE.Mesh(arrowGeo, arrowMat);
+            arrow.rotation.x = Math.PI / 2;  // Point forward (along Z)
+            arrow.position.z = 0.4;
+            arrow.position.y = 0;
+            mesh.add(arrow);
+            mesh.userData.influenceVisual = arrow;
+            
+        } else if (influenceType === 'ground') {
+            // Ground sensor: contact pad on bottom with small bumps
+            const padGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.08, 6);
+            const padMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.3
+            });
+            const pad = new THREE.Mesh(padGeo, padMat);
+            pad.position.y = -0.46;
+            mesh.add(pad);
+            
+            // Add small contact bumps
+            const bumpGeo = new THREE.SphereGeometry(0.05, 6, 6);
+            const positions = [[0.12, 0], [-0.12, 0], [0, 0.12], [0, -0.12]];
+            for (const [x, z] of positions) {
+                const bump = new THREE.Mesh(bumpGeo, padMat);
+                bump.position.set(x, -0.5, z);
+                mesh.add(bump);
+            }
+            mesh.userData.influenceVisual = pad;
+            
+        } else if (influenceType === 'rhythm') {
+            // Oscillator: pulsing ring that indicates rhythm
+            const ringGeo = new THREE.TorusGeometry(0.2, 0.04, 8, 16);
+            const ringMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.5,
+                transparent: true,
+                opacity: 0.9
+            });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;  // Lay flat
+            ring.position.y = 0.45;
+            mesh.add(ring);
+            mesh.userData.influenceVisual = ring;
+            mesh.userData.rhythmPhase = Math.random() * Math.PI * 2;  // Random starting phase
+            
+        } else if (influenceType === 'tilt') {
+            // Tilt sensor: balance beam/level indicator
+            const beamGeo = new THREE.BoxGeometry(0.4, 0.06, 0.06);
+            const beamMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.4
+            });
+            const beam = new THREE.Mesh(beamGeo, beamMat);
+            beam.position.y = 0.45;
+            mesh.add(beam);
+            
+            // Add small balls at each end to emphasize the balance
+            const ballGeo = new THREE.SphereGeometry(0.06, 8, 8);
+            const leftBall = new THREE.Mesh(ballGeo, beamMat);
+            leftBall.position.set(-0.2, 0.45, 0);
+            mesh.add(leftBall);
+            const rightBall = new THREE.Mesh(ballGeo, beamMat);
+            rightBall.position.set(0.2, 0.45, 0);
+            mesh.add(rightBall);
+            
+            mesh.userData.influenceVisual = beam;
+        }
+        // Additional influence types can be added here
     }
     
     spawnMultipleCreatures(creatures) {
@@ -963,11 +1558,15 @@ class Simulation {
         this.activeCreatures = creatures;
         this.selectedCreature = null;
         this.currentBestCreature = null;
-        this.followLeader = true;
+        // Don't force followLeader - respect user's current preference
         this.lastFollowedCreature = null;
-        this.cameraLookAt.set(0, 3, 0);
-        this.cameraVelocity.set(0, 0, 0);
-        this.lookAtVelocity.set(0, 0, 0);
+        
+        // Only reset camera lookAt if we're in follow mode
+        if (this.followLeader) {
+            this.cameraLookAt.set(0, 3, 0);
+            this.cameraVelocity.set(0, 0, 0);
+            this.lookAtVelocity.set(0, 0, 0);
+        }
         
         const configGroups = {};
         for (let c of creatures) {
@@ -1206,10 +1805,19 @@ class Simulation {
             return;
         }
         
-        for (let creature of aliveCreatures) {
-            creature.calculateFitness(this.fitnessMode);
+        // Calculate fitness for all alive creatures
+        // Outcast mode requires population-level analysis
+        if (this.fitnessMode === 'outcast') {
+            // This sets .fitness on all creatures based on their deviation from average
+            this.calculateOutcastFitnessForPopulation(aliveCreatures);
+        } else {
+            // Standard fitness modes - calculate individually
+            for (let creature of aliveCreatures) {
+                creature.calculateFitness(this.fitnessMode);
+            }
         }
         
+        // Sort by fitness ascending (lowest first = worst performer to eliminate)
         aliveCreatures.sort((a, b) => a.fitness - b.fitness);
         
         const victim = aliveCreatures[0];
@@ -1726,7 +2334,7 @@ class Simulation {
         if (this.selectedCreature) {
             this.unhighlightCreature(this.selectedCreature);
             this.selectedCreature = null;
-            this.followLeader = true;
+            // Don't force followLeader - respect user's current preference
             if (this.onSelectionChanged) this.onSelectionChanged(null);
         }
     }
@@ -1769,7 +2377,16 @@ class Simulation {
             return;
         }
         
-        if (!this.isRunning || this.isPaused) return;
+        // When paused, still allow camera movement and visual updates
+        // This lets the user look around while the simulation is frozen
+        if (!this.isRunning || this.isPaused) {
+            // Update camera so user can still pan/rotate/zoom while paused
+            this.updateCamera();
+            // Keep visual effects animating (particles, glows)
+            this.visualEffects.updateParticles(deltaTime);
+            this.visualEffects.updateEmissiveGlow();
+            return;
+        }
         
         this.world.step(this.fixedTimeStep, deltaTime, this.maxSubSteps);
         
@@ -1848,10 +2465,17 @@ class Simulation {
     updateCreature(creature) {
         if (!creature?.bodies?.length) return;
         
+        // Update influence channels if creature has any influence providers
+        if (creature.influenceProviders && creature.influenceProviders.length > 0) {
+            const context = this.buildInfluenceContext();
+            creature.influences = updateCreatureInfluences(creature, context);
+        }
+        
         const collisions = this.detectBlockCollisions(creature);
         
         for (let joint of creature.joints) {
-            const delta = joint.update();
+            // Pass influences to joint update (will be ignored if joint has no responses)
+            const delta = joint.update(creature.influences);
             if (joint.constraint) {
                 joint.constraint.enableMotor();
                 joint.constraint.setMotorSpeed(delta * 10);
@@ -1953,6 +2577,40 @@ class Simulation {
         return new THREE.Vector3(x / creature.bodies.length, y / creature.bodies.length, z / creature.bodies.length);
     }
     
+    /**
+     * Build context object for influence calculations.
+     * Provides environmental information that influence providers may need.
+     * @returns {Object} Context with sunDirection, dayProgress, simulationTime, etc.
+     */
+    buildInfluenceContext() {
+        const context = {};
+        
+        // Sun direction (normalized) for light sensors
+        if (this.sunLight) {
+            const pos = this.sunLight.position;
+            const length = Math.sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z);
+            if (length > 0) {
+                context.sunDirection = {
+                    x: pos.x / length,
+                    y: pos.y / length,
+                    z: pos.z / length
+                };
+            }
+        }
+        
+        // Day progress (0 to 1) for potential time-based influences
+        context.dayProgress = this.maxTime > 0 ? this.timeElapsed / this.maxTime : 0;
+        
+        // Simulation time in seconds for oscillator/rhythm sensors
+        context.simulationTime = this.timeElapsed;
+        
+        // Add more context here as needed for future influence types
+        // context.temperature = ...
+        // context.windDirection = ...
+        
+        return context;
+    }
+    
     smoothDamp(current, target, velocity, smoothTime, deltaTime) {
         const omega = 2.0 / smoothTime;
         const x = omega * deltaTime;
@@ -1987,15 +2645,7 @@ class Simulation {
                 // Look at the champion from directly above
                 targetLookAt.y = 0; // Look at ground level
                 
-                // Camera directly above at celebration height
-                const celebrationHeight = 80;
-                targetPosition.set(
-                    targetLookAt.x,
-                    celebrationHeight,
-                    targetLookAt.z
-                );
-                
-                // Smooth camera movement to track champion
+                // Smooth only the look-at position
                 const lookX = this.smoothDamp(this.cameraLookAt.x, targetLookAt.x, this.lookAtVelocity.x, smoothTime, deltaTime);
                 const lookY = this.smoothDamp(this.cameraLookAt.y, targetLookAt.y, this.lookAtVelocity.y, smoothTime, deltaTime);
                 const lookZ = this.smoothDamp(this.cameraLookAt.z, targetLookAt.z, this.lookAtVelocity.z, smoothTime, deltaTime);
@@ -2003,18 +2653,14 @@ class Simulation {
                 this.cameraLookAt.set(lookX.value, lookY.value, lookZ.value);
                 this.lookAtVelocity.set(lookX.velocity, lookY.velocity, lookZ.velocity);
                 
-                const posX = this.smoothDamp(this.cameraPosition.x, targetPosition.x, this.cameraVelocity.x, smoothTime, deltaTime);
-                const posY = this.smoothDamp(this.cameraPosition.y, targetPosition.y, this.cameraVelocity.y, smoothTime, deltaTime);
-                const posZ = this.smoothDamp(this.cameraPosition.z, targetPosition.z, this.cameraVelocity.z, smoothTime, deltaTime);
+                // Camera is ALWAYS directly above the look-at point (no separate smoothing)
+                // This prevents any apparent rotation
+                const celebrationHeight = 80;
+                this.cameraPosition.set(this.cameraLookAt.x, celebrationHeight, this.cameraLookAt.z);
                 
-                this.cameraPosition.set(posX.value, posY.value, posZ.value);
-                this.cameraVelocity.set(posX.velocity, posY.velocity, posZ.velocity);
-                
-                this.camera.position.copy(this.cameraPosition);
-                this.camera.lookAt(this.cameraLookAt);
-                
-                // Keep camera locked to north orientation
+                // Lock camera orientation - up is always Y axis
                 this.camera.up.set(0, 1, 0);
+                this.camera.position.copy(this.cameraPosition);
                 this.camera.lookAt(this.cameraLookAt);
             } else {
                 // Normal circular celebration camera
@@ -2049,105 +2695,197 @@ class Simulation {
         }
         
         // OVERVIEW + FOLLOW MODES: Top-down view that tracks the creature
-        // User can only zoom, no rotation or panning allowed
+        // User can pan (right drag) to offset view, but camera re-centers over time
         if (this.overviewMode && this.followLeader) {
             const toFollow = this.selectedCreature || this.currentBestCreature;
             
-            let smoothTime = this.cameraSmoothTime;
-            if (toFollow !== this.lastFollowedCreature && this.lastFollowedCreature !== null) {
-                smoothTime = 0.6;
+            // Detect when we're switching to a new target creature
+            // This triggers the ease-in transition effect
+            if (toFollow !== this.lastFollowedCreature) {
+                if (this.lastFollowedCreature !== null) {
+                    // Switching between creatures while already following
+                    // Start a new ease-in transition for smooth camera movement
+                    this.cameraTransitionProgress = 0.0;
+                    // Save current look-at position as starting point
+                    this.previousTargetPosition = this.cameraLookAt.clone();
+                    // Reset velocities for a clean start (prevents jerky continuation)
+                    this.lookAtVelocity.set(0, 0, 0);
+                    // Reset pan offset when switching creatures
+                    this.overviewPanOffset.set(0, 0, 0);
+                    // NOTE: Don't reset zoom when switching targets - keep current height
+                } else {
+                    // Overview+follow mode was just enabled (lastFollowedCreature was null)
+                    // Allow auto-zoom to frame the first creature properly
+                    this.userOverrideZoom = false;
+                }
             }
             this.lastFollowedCreature = toFollow;
+            
+            // Calculate and smoothly adjust overview height based on creature size
+            // Only when mode first starts (userOverrideZoom is false)
+            // Once user zooms manually OR we've auto-framed once, this stops
+            if (!this.userOverrideZoom && toFollow) {
+                const targetHeight = this.calculateCameraDistanceForCreature(toFollow);
+                this.overviewHeight += (targetHeight - this.overviewHeight) * 0.05;
+                // After initial framing settles, lock it in so target switches don't re-zoom
+                if (Math.abs(targetHeight - this.overviewHeight) < 0.5) {
+                    this.userOverrideZoom = true;
+                }
+            }
+            
+            // Gradually decay the pan offset so camera re-centers on creature
+            // Decay rate: offset reduces by ~63% per second (exponential decay)
+            const decayRate = 2.0;  // Higher = faster re-centering
+            const decayFactor = Math.exp(-decayRate * deltaTime);
+            this.overviewPanOffset.x *= decayFactor;
+            this.overviewPanOffset.z *= decayFactor;
             
             // Get creature position and track it
             if (toFollow?.bodies?.length) {
                 targetLookAt = this.getCreatureCenterOfMass(toFollow);
-                targetLookAt.y = 0; // Look at ground level
+            }
+            targetLookAt.y = 0; // Always look at ground level
+            
+            // Apply pan offset to target position
+            targetLookAt.x += this.overviewPanOffset.x;
+            targetLookAt.z += this.overviewPanOffset.z;
+            
+            // Update transition progress if we're in an ease-in transition
+            if (this.cameraTransitionProgress < 1.0) {
+                this.cameraTransitionProgress += deltaTime / this.cameraTransitionDuration;
+                this.cameraTransitionProgress = Math.min(1.0, this.cameraTransitionProgress);
             }
             
-            // Camera is directly above the look-at point
-            const effectiveHeight = this.overviewHeight;
-            targetPosition.set(
-                targetLookAt.x,
-                effectiveHeight,
-                targetLookAt.z
-            );
+            // Apply ease-in curve: starts slow, accelerates toward end
+            // Using cubic ease-in: t^3 gives a nice slow-start feel
+            const easeT = this.cameraTransitionProgress;
+            const easedProgress = easeT * easeT * easeT;  // Cubic ease-in
             
-            // Smooth camera movement
+            // During transition, blend between slow and normal smooth time
+            const slowSmoothTime = 1.2;
+            const normalSmoothTime = this.cameraSmoothTime;
+            const smoothTime = slowSmoothTime + (normalSmoothTime - slowSmoothTime) * easedProgress;
+            
+            // If in transition, blend the target position for even smoother start
+            if (this.cameraTransitionProgress < 1.0 && this.previousTargetPosition) {
+                // Blend horizontal position, keep y at ground level
+                targetLookAt.x = this.previousTargetPosition.x + (targetLookAt.x - this.previousTargetPosition.x) * easedProgress;
+                targetLookAt.z = this.previousTargetPosition.z + (targetLookAt.z - this.previousTargetPosition.z) * easedProgress;
+            }
+            
+            // Smooth only the look-at position
             const lookX = this.smoothDamp(this.cameraLookAt.x, targetLookAt.x, this.lookAtVelocity.x, smoothTime, deltaTime);
             const lookY = this.smoothDamp(this.cameraLookAt.y, targetLookAt.y, this.lookAtVelocity.y, smoothTime, deltaTime);
             const lookZ = this.smoothDamp(this.cameraLookAt.z, targetLookAt.z, this.lookAtVelocity.z, smoothTime, deltaTime);
             
-            const posX = this.smoothDamp(this.cameraPosition.x, targetPosition.x, this.cameraVelocity.x, smoothTime, deltaTime);
-            const posY = this.smoothDamp(this.cameraPosition.y, targetPosition.y, this.cameraVelocity.y, smoothTime, deltaTime);
-            const posZ = this.smoothDamp(this.cameraPosition.z, targetPosition.z, this.cameraVelocity.z, smoothTime, deltaTime);
-            
             this.cameraLookAt.set(lookX.value, lookY.value, lookZ.value);
             this.lookAtVelocity.set(lookX.velocity, lookY.velocity, lookZ.velocity);
             
-            this.cameraPosition.set(posX.value, posY.value, posZ.value);
-            this.cameraVelocity.set(posX.velocity, posY.velocity, posZ.velocity);
+            // Camera is ALWAYS directly above the look-at point (no separate smoothing)
+            // This prevents any apparent rotation
+            const effectiveHeight = this.overviewHeight;
+            this.cameraPosition.set(this.cameraLookAt.x, effectiveHeight, this.cameraLookAt.z);
             
+            // Lock camera orientation - up is always Y axis
+            this.camera.up.set(0, 1, 0);
             this.camera.position.copy(this.cameraPosition);
             this.camera.lookAt(this.cameraLookAt);
-            
-            // Lock camera orientation to north (0,1,0 up vector)
-            this.camera.up.set(0, 1, 0);
-            this.camera.lookAt(this.cameraLookAt);
         }
-        // OVERVIEW ONLY: Top-down view with user control of rotation and panning
+        // OVERVIEW ONLY: Top-down view with panning, no rotation
+        // Camera always looks straight down, aligned with ground plane
         else if (this.overviewMode && !this.followLeader) {
-            const effectiveHeight = this.overviewHeight;
-            const offset = 0.01;
             targetLookAt.copy(this.overviewCenter);
-            targetPosition.set(
-                this.overviewCenter.x + Math.sin(this.overviewRotation) * offset,
-                effectiveHeight,
-                this.overviewCenter.z + Math.cos(this.overviewRotation) * offset
-            );
+            targetLookAt.y = 0;  // Look at ground level
             
+            // Smooth only the look-at position
             const lookX = this.smoothDamp(this.cameraLookAt.x, targetLookAt.x, this.lookAtVelocity.x, 0.3, deltaTime);
             const lookY = this.smoothDamp(this.cameraLookAt.y, targetLookAt.y, this.lookAtVelocity.y, 0.3, deltaTime);
             const lookZ = this.smoothDamp(this.cameraLookAt.z, targetLookAt.z, this.lookAtVelocity.z, 0.3, deltaTime);
             
-            const posX = this.smoothDamp(this.cameraPosition.x, targetPosition.x, this.cameraVelocity.x, 0.3, deltaTime);
-            const posY = this.smoothDamp(this.cameraPosition.y, targetPosition.y, this.cameraVelocity.y, 0.3, deltaTime);
-            const posZ = this.smoothDamp(this.cameraPosition.z, targetPosition.z, this.cameraVelocity.z, 0.3, deltaTime);
-            
             this.cameraLookAt.set(lookX.value, lookY.value, lookZ.value);
             this.lookAtVelocity.set(lookX.velocity, lookY.velocity, lookZ.velocity);
             
-            this.cameraPosition.set(posX.value, posY.value, posZ.value);
-            this.cameraVelocity.set(posX.velocity, posY.velocity, posZ.velocity);
+            // Camera is ALWAYS directly above the look-at point (no separate smoothing)
+            // This prevents any apparent rotation
+            const effectiveHeight = this.overviewHeight;
+            this.cameraPosition.set(this.cameraLookAt.x, effectiveHeight, this.cameraLookAt.z);
             
+            // Lock camera orientation - up is always Y axis
+            this.camera.up.set(0, 1, 0);
             this.camera.position.copy(this.cameraPosition);
-            this.camera.lookAt(this.cameraLookAt);
-            
-            // Apply rotation to up vector for compass effect
-            this.camera.up.set(
-                Math.sin(this.overviewRotation),
-                0,
-                Math.cos(this.overviewRotation)
-            );
             this.camera.lookAt(this.cameraLookAt);
         }
         // FOLLOW ONLY: Normal 3D following camera
         else if (!this.overviewMode && this.followLeader) {
             const toFollow = this.selectedCreature || this.currentBestCreature;
             
-            let smoothTime = this.cameraSmoothTime;
-            if (toFollow !== this.lastFollowedCreature && this.lastFollowedCreature !== null) {
-                smoothTime = 0.6;
+            // Detect when we're switching to a new target creature
+            // This triggers the ease-in transition effect
+            if (toFollow !== this.lastFollowedCreature) {
+                if (this.lastFollowedCreature !== null) {
+                    // Switching between creatures while already following
+                    // Start a new ease-in transition for smooth camera movement
+                    this.cameraTransitionProgress = 0.0;
+                    // Save current look-at position as starting point
+                    this.previousTargetPosition = this.cameraLookAt.clone();
+                    // Reset velocities for a clean start (prevents jerky continuation)
+                    this.cameraVelocity.set(0, 0, 0);
+                    this.lookAtVelocity.set(0, 0, 0);
+                    // NOTE: Don't reset zoom when switching targets - keep current zoom/rotation
+                } else {
+                    // Follow mode was just enabled (lastFollowedCreature was null)
+                    // Allow auto-zoom to frame the first creature properly
+                    this.userOverrideZoom = false;
+                }
             }
             this.lastFollowedCreature = toFollow;
             
+            // Calculate and smoothly adjust camera distance based on creature size
+            // Only when follow mode first starts (userOverrideZoom is false)
+            // Once user zooms manually OR we've auto-framed once, this stops
+            if (!this.userOverrideZoom && toFollow) {
+                this.targetCameraDistance = this.calculateCameraDistanceForCreature(toFollow);
+                // Smoothly interpolate to target distance
+                this.cameraDistance += (this.targetCameraDistance - this.cameraDistance) * 0.05;
+                // After initial framing settles, lock it in so target switches don't re-zoom
+                if (Math.abs(this.targetCameraDistance - this.cameraDistance) < 0.5) {
+                    this.userOverrideZoom = true;
+                }
+            }
+            
+            // Get the target position (where we want to look)
             if (toFollow?.bodies?.length) {
                 targetLookAt = this.getCreatureCenterOfMass(toFollow);
             }
             
+            // Update transition progress if we're in an ease-in transition
+            if (this.cameraTransitionProgress < 1.0) {
+                this.cameraTransitionProgress += deltaTime / this.cameraTransitionDuration;
+                this.cameraTransitionProgress = Math.min(1.0, this.cameraTransitionProgress);
+            }
+            
+            // Apply ease-in curve: starts slow, accelerates toward end
+            // Using cubic ease-in: t^3 gives a nice slow-start feel
+            const easeT = this.cameraTransitionProgress;
+            const easedProgress = easeT * easeT * easeT;  // Cubic ease-in
+            
+            // During transition, blend between slow and normal smooth time
+            // smoothTime is higher (slower) at start, decreases (faster) as we progress
+            const slowSmoothTime = 1.2;   // Very slow at start
+            const normalSmoothTime = this.cameraSmoothTime;  // Normal speed at end
+            const smoothTime = slowSmoothTime + (normalSmoothTime - slowSmoothTime) * easedProgress;
+            
+            // If in transition, blend the target position for even smoother start
+            if (this.cameraTransitionProgress < 1.0 && this.previousTargetPosition) {
+                // Blend between old position and new target based on eased progress
+                targetLookAt.x = this.previousTargetPosition.x + (targetLookAt.x - this.previousTargetPosition.x) * easedProgress;
+                targetLookAt.y = this.previousTargetPosition.y + (targetLookAt.y - this.previousTargetPosition.y) * easedProgress;
+                targetLookAt.z = this.previousTargetPosition.z + (targetLookAt.z - this.previousTargetPosition.z) * easedProgress;
+            }
+            
             targetPosition.set(
                 this.cameraLookAt.x + Math.cos(this.cameraRotationX) * this.cameraDistance,
-                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 5,
+                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 2,
                 this.cameraLookAt.z + Math.sin(this.cameraRotationX) * this.cameraDistance
             );
             
@@ -2160,7 +2898,7 @@ class Simulation {
             
             targetPosition.set(
                 this.cameraLookAt.x + Math.cos(this.cameraRotationX) * this.cameraDistance,
-                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 5,
+                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 2,
                 this.cameraLookAt.z + Math.sin(this.cameraRotationX) * this.cameraDistance
             );
             
@@ -2174,13 +2912,20 @@ class Simulation {
             // User controls are handled entirely in mouse events
             targetPosition.set(
                 this.cameraLookAt.x + Math.cos(this.cameraRotationX) * this.cameraDistance,
-                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 5,
+                this.cameraLookAt.y + this.cameraDistance * Math.sin(this.cameraRotationY) + 2,
                 this.cameraLookAt.z + Math.sin(this.cameraRotationX) * this.cameraDistance
             );
             
             this.camera.position.copy(targetPosition);
             this.cameraPosition.copy(targetPosition);
             this.camera.lookAt(this.cameraLookAt);
+        }
+        
+        // Clamp camera height to stay above ground plane
+        // This applies to all camera modes as a final safety check
+        if (this.camera.position.y < this.cameraMinHeight) {
+            this.camera.position.y = this.cameraMinHeight;
+            this.cameraPosition.y = this.cameraMinHeight;
         }
     }
     
@@ -2218,37 +2963,135 @@ class Simulation {
             this.overviewCenter.y = 0;
             this.overviewRotation = 0;
             
-            // Calculate appropriate overview height based on creature positions
-            let maxExtent = 50;
-            if (this.activeCreatures && this.activeCreatures.length > 0) {
-                for (let creature of this.activeCreatures) {
-                    if (creature.bodies && creature.bodies.length > 0) {
-                        for (let body of creature.bodies) {
-                            maxExtent = Math.max(maxExtent, Math.abs(body.position.x) + 10);
-                            maxExtent = Math.max(maxExtent, Math.abs(body.position.z) + 10);
-                        }
-                    }
+            // Set initial height based on whether follow is enabled
+            if (this.followLeader) {
+                // Overview + Follow: Use height based on creature size
+                const toFollow = this.selectedCreature || this.currentBestCreature;
+                if (toFollow) {
+                    this.overviewHeight = this.calculateCameraDistanceForCreature(toFollow);
+                } else {
+                    this.overviewHeight = 15;
                 }
+            } else {
+                // Overview only: Zoom out to show all creatures
+                this.overviewHeight = this.calculateOverviewHeightForAllCreatures();
             }
-            this.overviewHeight = Math.max(120, maxExtent * 1.5);
         }
         
         // Set the mode flags
         if (mode === 'overview') {
             this.overviewMode = true;
+            // Reset pan offset when entering overview mode
+            this.overviewPanOffset.set(0, 0, 0);
+            // Reset zoom override so auto-framing takes effect
+            this.userOverrideZoom = false;
         } else if (mode === 'follow') {
             this.followLeader = true;
             this.lastFollowedCreature = null;
             this.camera.up.set(0, 1, 0);
+            // Reset zoom override so auto-framing takes effect
+            this.userOverrideZoom = false;
             if (this.onFollowLeaderChanged) {
                 this.onFollowLeaderChanged();
             }
         }
     }
     
+    /**
+     * Calculate overview height to fit all creatures in view with some buffer
+     * Used when in overview-only mode (no follow)
+     */
+    calculateOverviewHeightForAllCreatures() {
+        let minX = Infinity, maxX = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        
+        if (this.activeCreatures && this.activeCreatures.length > 0) {
+            for (let creature of this.activeCreatures) {
+                if (creature.bodies && creature.bodies.length > 0) {
+                    for (let body of creature.bodies) {
+                        minX = Math.min(minX, body.position.x);
+                        maxX = Math.max(maxX, body.position.x);
+                        minZ = Math.min(minZ, body.position.z);
+                        maxZ = Math.max(maxZ, body.position.z);
+                    }
+                }
+            }
+        }
+        
+        // If no creatures, use default bounds
+        if (minX === Infinity) {
+            return 100;
+        }
+        
+        // Calculate bounding box size with buffer
+        const buffer = 30;  // Extra space around creatures
+        const width = (maxX - minX) + buffer * 2;
+        const depth = (maxZ - minZ) + buffer * 2;
+        const maxExtent = Math.max(width, depth);
+        
+        // Calculate height needed to see the full extent
+        // For 60 degree FOV, height ~= extent * 0.7 gives good framing
+        const height = Math.max(60, maxExtent * 0.7);
+        
+        // Also set the overview center to the center of all creatures
+        this.overviewCenter.set(
+            (minX + maxX) / 2,
+            0,
+            (minZ + maxZ) / 2
+        );
+        
+        return height;
+    }
+    
+    /**
+     * Calculate ideal camera distance to frame a creature with buffer
+     * @param {Object} creature - The creature to frame
+     * @returns {number} Ideal camera distance
+     */
+    calculateCameraDistanceForCreature(creature) {
+        if (!creature || !creature.bodies || creature.bodies.length === 0) {
+            return 15;  // Default distance
+        }
+        
+        // Calculate creature's bounding box
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        
+        for (let body of creature.bodies) {
+            minX = Math.min(minX, body.position.x);
+            maxX = Math.max(maxX, body.position.x);
+            minY = Math.min(minY, body.position.y);
+            maxY = Math.max(maxY, body.position.y);
+            minZ = Math.min(minZ, body.position.z);
+            maxZ = Math.max(maxZ, body.position.z);
+        }
+        
+        // Calculate size with buffer
+        const buffer = 3;  // Extra space around creature
+        const width = (maxX - minX) + buffer * 2;
+        const height = (maxY - minY) + buffer * 2;
+        const depth = (maxZ - minZ) + buffer * 2;
+        
+        // Use the largest dimension to determine distance
+        const maxSize = Math.max(width, height, depth);
+        
+        // Calculate distance based on FOV (60 degrees)
+        // Distance = size / (2 * tan(FOV/2)) with some extra margin
+        const distance = Math.max(8, maxSize * 1.5 + 5);
+        
+        return distance;
+    }
+    
     returnFromOverview() {
         // Reset camera orientation to normal
         this.camera.up.set(0, 1, 0);
+        
+        // Reset pan offset
+        this.overviewPanOffset.set(0, 0, 0);
+        
+        // Reset zoom override so auto-framing takes effect
+        this.userOverrideZoom = false;
         
         // Restore saved camera state if available
         if (this.savedCameraState) {
@@ -2264,10 +3107,11 @@ class Simulation {
     }
     
     resetCamera() {
-        // Reset rotation and distance
         this.cameraRotationX = 0;
-        this.cameraRotationY = Math.PI / 6;
-        this.cameraDistance = 40;
+        this.cameraRotationY = 0.15;  // ~8 degrees - very low angle to see horizon/sky
+        this.cameraDistance = 15;
+        this.targetCameraDistance = 15;
+        this.userOverrideZoom = false;  // Reset zoom override
         
         // Turn on follow mode, turn off overview mode
         this.followLeader = true;
@@ -2285,6 +3129,7 @@ class Simulation {
         this.overviewCenter.set(0, 0, 0);
         this.overviewRotation = 0;
         this.overviewHeight = 120;
+        this.overviewPanOffset.set(0, 0, 0);
         this.savedCameraState = null;
         
         // Notify about mode change
@@ -2315,31 +3160,35 @@ class Simulation {
         
         if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this.mouseMoved = true;
         
-        // OVERVIEW + FOLLOW: Only zoom allowed, mouse drag does nothing
+        // OVERVIEW + FOLLOW: Allow panning (right drag) to offset from followed creature
+        // No rotation allowed - camera always looks straight down
         if (this.overviewMode && this.followLeader) {
-            // Do nothing - user can only zoom via scroll wheel
+            if (this.mouseButton === 2) {
+                // Right drag: Pan with offset from followed creature
+                // The offset will gradually decay back to zero
+                const panSpeed = this.overviewHeight * 0.002;
+                this.overviewPanOffset.x -= dx * panSpeed;
+                this.overviewPanOffset.z -= dy * panSpeed;
+            }
+            // Left drag does nothing in this mode (no rotation when looking down)
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
             return;
         }
         
-        // OVERVIEW ONLY: Allow rotation (left drag) and panning (right drag)
+        // OVERVIEW ONLY: Allow panning (right drag), no rotation
+        // Camera always looks straight down, aligned with ground
         if (this.overviewMode && !this.followLeader) {
-            if (this.mouseButton === 0) {
-                // Left drag: Rotate the view (changes which direction is "north")
-                this.overviewRotation += dx * 0.01;
-            } else if (this.mouseButton === 2) {
+            if (this.mouseButton === 2) {
                 // Right drag: Pan the camera center
-                // Calculate pan direction based on current rotation
-                const cosR = Math.cos(this.overviewRotation);
-                const sinR = Math.sin(this.overviewRotation);
                 const panSpeed = this.overviewHeight * 0.002;
-                
-                // Fixed panning: drag right moves camera right, drag up moves camera up
-                // The view is rotated, so we need to transform the pan direction
-                this.overviewCenter.x += (dx * cosR + dy * sinR) * panSpeed;
-                this.overviewCenter.z += (-dx * sinR + dy * cosR) * panSpeed;
+                this.overviewCenter.x -= dx * panSpeed;
+                this.overviewCenter.z -= dy * panSpeed;
             }
+            // Left drag does nothing in overview mode (no rotation)
+            this.lastMouseX = e.clientX;
+            this.lastMouseY = e.clientY;
+            return;
         }
         // FOLLOW ONLY or NEITHER: Normal 3D camera controls
         else {
@@ -2354,7 +3203,7 @@ class Simulation {
                     // Camera will follow but use our rotation
                 }
             } else if (this.mouseButton === 2) {
-                // Right drag: Pan the look-at point
+                // Right drag: Pan the look-at point along the ground plane
                 // This disables follow leader if it was on
                 if (this.followLeader) {
                     this.followLeader = false;
@@ -2363,14 +3212,21 @@ class Simulation {
                     }
                 }
                 
-                // Calculate pan direction based on camera orientation
-                const right = new THREE.Vector3();
-                this.camera.getWorldDirection(right);
-                right.cross(new THREE.Vector3(0, 1, 0)).normalize();
+                // Calculate pan directions based on camera's horizontal rotation
+                // Right vector: perpendicular to camera facing direction on ground plane
+                const rightX = Math.cos(this.cameraRotationX + Math.PI / 2);
+                const rightZ = Math.sin(this.cameraRotationX + Math.PI / 2);
                 
-                // Pan the look-at point
-                this.cameraLookAt.add(right.multiplyScalar(-dx * 0.1));
-                this.cameraLookAt.y += dy * 0.1;
+                // Forward vector: direction camera is facing on ground plane
+                const forwardX = Math.cos(this.cameraRotationX);
+                const forwardZ = Math.sin(this.cameraRotationX);
+                
+                // Pan speed scales with distance for consistent feel
+                const panSpeed = this.cameraDistance * 0.003;
+                
+                // Apply horizontal drag to right direction, vertical drag to forward direction
+                this.cameraLookAt.x += (dx * rightX - dy * forwardX) * panSpeed;
+                this.cameraLookAt.z += (dx * rightZ - dy * forwardZ) * panSpeed;
             }
         }
         
@@ -2383,6 +3239,9 @@ class Simulation {
     onMouseWheel(e) {
         e.preventDefault();
         
+        // User is manually controlling zoom - disable auto-zoom
+        this.userOverrideZoom = true;
+        
         // In any overview mode (with or without follow), zoom controls the height
         if (this.overviewMode) {
             this.overviewHeight += e.deltaY * 0.1;
@@ -2392,6 +3251,7 @@ class Simulation {
         else {
             this.cameraDistance += e.deltaY * 0.03;
             this.cameraDistance = Math.max(5, Math.min(120, this.cameraDistance));
+            this.targetCameraDistance = this.cameraDistance;  // Sync target to prevent snap-back
         }
     }
 }

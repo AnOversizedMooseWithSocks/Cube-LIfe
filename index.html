@@ -649,11 +649,11 @@
                 <!-- Settings that can only be changed before starting -->
                 <div class="inline-setting">
                     <span>Variants/config:</span>
-                    <input type="number" id="instances-input" value="4" min="1" max="10">
+                    <input type="number" id="instances-input" value="3" min="1" max="10">
                 </div>
                 <div class="inline-setting">
                     <span>Configurations:</span>
-                    <input type="number" id="configs-input" value="5" min="1" max="20">
+                    <input type="number" id="configs-input" value="3" min="1" max="20">
                 </div>
                 <div class="inline-setting">
                     <span>Blocks/gen:</span>
@@ -661,7 +661,7 @@
                 </div>
                 <div class="inline-setting">
                     <span>Max blocks:</span>
-                    <input type="number" id="max-blocks-input" value="0" min="0" max="50" title="Maximum blocks per creature (0 = unlimited). When reached, that genetic line is complete.">
+                    <input type="number" id="max-blocks-input" value="20" min="0" max="50" title="Maximum blocks per creature (0 = unlimited). When reached, that genetic line is complete.">
                 </div>
                 <div class="inline-setting">
                     <span>Round duration (s):</span>
@@ -684,6 +684,64 @@
                     </label>
                 </div>
                 
+                <!-- Sensor Blocks Configuration - Per-sensor control -->
+                <div class="sensor-config" style="margin-top: 8px; padding: 6px; background: rgba(100, 255, 218, 0.05); border-radius: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-size: 10px;">&#x1F4E1; Sensors:</span>
+                        <span id="sensor-description" style="font-size: 8px; color: #888;">All off</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; font-size: 9px;">
+                        <div title="Gravity sensor: detects orientation">
+                            <span style="color: #ffaa00;">Grv</span>
+                            <select id="sensor-gravity" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Light sensor: detects sun direction">
+                            <span style="color: #88ccff;">Lgt</span>
+                            <select id="sensor-light" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Velocity sensor: detects movement speed">
+                            <span style="color: #44ff88;">Vel</span>
+                            <select id="sensor-velocity" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Ground sensor: detects ground contact">
+                            <span style="color: #cc8844;">Gnd</span>
+                            <select id="sensor-ground" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Oscillator: rhythmic signal for coordinated movement">
+                            <span style="color: #aa44ff;">Rhy</span>
+                            <select id="sensor-rhythm" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Tilt sensor: detects left/right lean">
+                            <span style="color: #44ffff;">Tilt</span>
+                            <select id="sensor-tilt" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start" selected>Start</option>
+                                <option value="evolve">Evolve</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="mode-selector">
                     <label>Fitness Mode:</label>
                     <select id="fitness-mode">
@@ -702,7 +760,7 @@
                 <div class="inline-setting">
                     <span>&#x1F480; Sudden Death:</span>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="sudden-death-toggle">
+                        <input type="checkbox" id="sudden-death-toggle" checked>
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
@@ -815,16 +873,26 @@
             </div>
             <div class="hint-text" id="sel-mode-formula" style="font-size: 8px;">-</div>
             
-            <!-- All Mode Scores comparison -->
-            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px; margin-top: 4px;">
-                <div class="hint-text" style="color: #888; margin-bottom: 2px;">All Mode Scores:</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1px; font-size: 9px;">
-                    <span><span style="color:#888;">&#x1F3C3;</span> <span id="sel-score-distance" style="color:#64ffda;">0</span></span>
-                    <span><span style="color:#888;">&#x26A1;</span> <span id="sel-score-efficiency" style="color:#64ffda;">0</span></span>
-                    <span><span style="color:#888;">&#x1F680;</span> <span id="sel-score-jump" style="color:#64ffda;">0</span></span>
-                    <span><span style="color:#888;">&#x1F5FA;</span> <span id="sel-score-area" style="color:#64ffda;">0</span></span>
-                    <span style="grid-column: span 2;"><span style="color:#888;">&#x1F47D;</span> Outcast: <span id="sel-score-outcast" style="color:#64ffda;">0</span> <span style="color:#666;">(vs pop avg)</span></span>
-                    <span style="grid-column: span 2;"><span style="color:#888;">&#x1F3C5;</span> Spartan: <span id="sel-score-spartan" style="color:#64ffda;">0</span> <span style="color:#666;">(all-around)</span></span>
+            <!-- All Mode Scores comparison - compact grid -->
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px;">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; font-size: 8px;">
+                    <span title="Distance Mode"><span style="color:#888;">D:</span><span id="sel-score-distance" style="color:#64ffda;">0</span></span>
+                    <span title="Efficiency Mode"><span style="color:#888;">E:</span><span id="sel-score-efficiency" style="color:#64ffda;">0</span></span>
+                    <span title="Jump Mode"><span style="color:#888;">J:</span><span id="sel-score-jump" style="color:#64ffda;">0</span></span>
+                    <span title="Area Mode"><span style="color:#888;">A:</span><span id="sel-score-area" style="color:#64ffda;">0</span></span>
+                    <span title="Outcast Mode"><span style="color:#888;">O:</span><span id="sel-score-outcast" style="color:#64ffda;">0</span></span>
+                    <span title="Spartan Mode"><span style="color:#888;">S:</span><span id="sel-score-spartan" style="color:#64ffda;">0</span></span>
+                </div>
+            </div>
+            
+            <!-- Special Blocks (Sensors) Section - compact inline -->
+            <div id="sel-sensors-section" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px; display: none;">
+                <div style="font-size: 9px;">
+                    <span style="color: #888;">&#x1F4E1;</span>
+                    <span id="sel-sensors-list" style="color: #aa44ff;"></span>
+                    <span id="sel-sensor-added" style="color: #4ade80; display: none;">
+                        +<span id="sel-sensor-added-type"></span>
+                    </span>
                 </div>
             </div>
             
@@ -1017,6 +1085,7 @@
     
     <!-- Application -->
     <script src="creature.js"></script>
+    <script src="influence-system.js"></script>
     <script src="visual-effects.js"></script>
     <script src="evolution.js"></script>
     <script src="evolution-tree.js"></script>

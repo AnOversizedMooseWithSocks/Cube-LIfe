@@ -12,13 +12,16 @@ Welcome to the 3D Block Creature Evolution Simulator! This guide will walk you t
 2. [Quick Start](#quick-start)
 3. [Main Interface](#main-interface)
 4. [Evolution Settings](#evolution-settings)
-5. [Fitness Modes](#fitness-modes)
-6. [Camera Controls](#camera-controls)
-7. [Information Panels](#information-panels)
-8. [Evolution Tree](#evolution-tree)
-9. [Special Modes](#special-modes)
-10. [Saving and Loading](#saving-and-loading)
-11. [Tips and Strategies](#tips-and-strategies)
+5. [Sensor System](#sensor-system)
+6. [Fitness Modes](#fitness-modes)
+7. [Camera Controls](#camera-controls)
+8. [Information Panels](#information-panels)
+9. [Evolution Tree](#evolution-tree)
+10. [Special Modes](#special-modes)
+11. [Saving and Loading](#saving-and-loading)
+12. [Tournament Mode](#tournament-mode)
+13. [Tips and Strategies](#tips-and-strategies)
+14. [Version History](#version-history)
 
 ---
 
@@ -34,12 +37,7 @@ Here's what a typical evolution round looks like:
 
 *A generation of creatures competing in the arena. The left panel shows evolution controls, while the right panels display champion and focused creature statistics.*
 
-<video controls width="100%">
-  <source src="/media/evolutionRound.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
 
-*Video: Early stages of evolution showing creatures developing basic locomotion*
 
 ---
 
@@ -47,7 +45,7 @@ Here's what a typical evolution round looks like:
 
 1. Open the simulator in your web browser
 2. Adjust settings if desired (or use defaults)
-3. Click the **▶ Start** button
+3. Click the **Start** button
 4. Watch creatures compete for 60 seconds (default round duration)
 5. The champion advances and spawns the next generation
 6. Evolution continues automatically
@@ -64,12 +62,12 @@ The interface is organized into several panels:
 
 This panel contains all your evolution settings and controls:
 
-- **Gen** — Current generation number
-- **Pop** — Population size (total creatures competing)
-- **Time** — Countdown timer for the current round
-- **Best Dist** — Furthest distance traveled this round
-- **Height** — Maximum height achieved
-- **Champ Fitness** — Current champion's fitness score
+- **Gen** - Current generation number
+- **Pop** - Population size (total creatures competing)
+- **Time** - Countdown timer for the current round
+- **Best Dist** - Furthest distance traveled this round
+- **Height** - Maximum height achieved
+- **Champ Fitness** - Current champion's fitness score
 
 ### Right Panel (Champion Info)
 
@@ -137,41 +135,86 @@ A toggle that eliminates the worst 75% of creatures after the first 10 seconds. 
 
 ---
 
+## Sensor System
+
+Creatures can evolve special sensor blocks that detect environmental conditions and modify joint behavior. Sensors add a layer of reactive "intelligence" to creatures, allowing them to respond to their surroundings rather than just following fixed movement patterns.
+
+### Sensor Types
+
+The simulator includes six sensor types, each detecting different environmental information:
+
+| Sensor | Color | Description |
+|--------|-------|-------------|
+| **Grv** (Gravity) | Orange | Detects orientation relative to "up". Returns +1 when upright, -1 when inverted. |
+| **Lgt** (Light) | Light Blue | Detects sun direction. Returns +1 when facing the sun, -1 when facing away. |
+| **Vel** (Velocity) | Green | Detects movement speed. Returns -1 when stopped, +1 at full speed. |
+| **Gnd** (Ground) | Brown | Detects ground contact. Returns +1 when touching ground, -1 when airborne. |
+| **Rhy** (Rhythm) | Purple | Oscillator that provides a rhythmic signal for coordinated movement patterns. |
+| **Tilt** | Cyan | Detects left/right lean. Returns +1 when tilting right, -1 when tilting left. |
+
+### Sensor Modes
+
+Each sensor can be set to one of three modes:
+
+- **Off** - Sensor is disabled. Creatures cannot have this sensor type.
+- **Start** - All generation 1 creatures begin with this sensor. Useful for giving creatures an initial advantage.
+- **Evolve** - Sensor may be added through random mutation during evolution. This is the default for most sensors.
+
+### How Sensors Work
+
+When a sensor block is added to a creature:
+1. The sensor continuously calculates a value from -1 to +1 based on its type
+2. This value modifies the movement of connected joints
+3. Joint responses can amplify, invert, or ignore sensor signals based on evolved weights
+4. The result is creatures that can adapt their movement to environmental conditions
+
+### Using Sensors Effectively
+
+- **Gravity + Ground** sensors help creatures right themselves when tipped over
+- **Light** sensors can create sun-tracking behavior
+- **Velocity** sensors help creatures modulate effort based on their current speed
+- **Rhythm** sensors create coordinated, rhythmic gaits
+- **Tilt** sensors help creatures maintain balance
+
+Sensors are displayed in the creature info panels when present, showing which sensor types a creature has evolved.
+
+---
+
 ## Fitness Modes
 
 The fitness mode determines what makes a creature "successful." Different modes reward completely different strategies.
 
-### 🏃 Distance
+### Distance
 Rewards creatures that travel the furthest from their starting position. This is the classic mode that encourages forward locomotion.
 
-**Formula:** Distance × 2 + Height × 0.5
+**Formula:** Distance x 2 + Height x 0.5
 
-### ⚡ Efficiency
+### Efficiency
 Rewards creatures that cover the most ground per tile lit up. Favors streamlined, direct movers over wanderers.
 
-**Formula:** (Distance ÷ Tiles) × 100 + Height × 0.2
+**Formula:** (Distance / Tiles) x 100 + Height x 0.2
 
-### 🚀 Jump Height
+### Jump Height
 Rewards creatures that achieve the highest jump after landing from spawn. Encourages bouncy, explosive movement.
 
-**Formula:** Jump × 10 + Distance × 0.1
+**Formula:** Jump x 10 + Distance x 0.1
 
-### 🗺 Area Coverage
+### Area Coverage
 Rewards creatures that light up the most ground tiles. Favors explorers and wanderers over straight-line movers.
 
-**Formula:** Tiles × 1 + Distance × 0.05
+**Formula:** Tiles x 1 + Distance x 0.05
 
-### 👽 Outcast
+### Outcast
 A unique mode that rewards the creature most different from the population average. The "weirdo" wins! This encourages diversity and novel solutions.
 
 **Formula:** (Deviation from population average across all metrics)
 
-### 🏅 Spartan
+### Spartan
 A balanced mode that rewards well-rounded performance across all metrics. The true all-around athlete.
 
-**Formula:** Distance × 1 + Height × 2 + Tiles × 0.2 + Jump × 3
+**Formula:** Distance x 1 + Height x 2 + Tiles x 0.2 + Jump x 3
 
-### 🎲 Random
+### Random
 Randomly selects a different fitness mode each generation, preventing creatures from over-specializing and encouraging adaptable designs.
 
 ---
@@ -180,21 +223,21 @@ Randomly selects a different fitness mode each generation, preventing creatures 
 
 The bottom center of the screen provides camera controls:
 
-### 🐾 Follow
+### Follow
 Automatically follows the current best-performing creature. The camera smoothly tracks their movement.
 
-### 🔵 Overview
+### Overview
 Switches to a top-down view of the entire arena, perfect for watching all creatures at once.
 
-### ↺ Reset
+### Reset
 Returns the camera to its default position.
 
 ### Manual Camera
 When not in Follow or Overview mode:
-- **Drag** — Rotate the camera around the focus point
-- **Right-drag** — Pan the camera
-- **Scroll** — Zoom in/out
-- **Click** — Select a specific creature
+- **Drag** - Rotate the camera around the focus point
+- **Right-drag** - Pan the camera
+- **Scroll** - Zoom in/out
+- **Click** - Select a specific creature
 
 ---
 
@@ -203,10 +246,10 @@ When not in Follow or Overview mode:
 ### Target Tracking
 Below the main controls, you'll see:
 
-- **Target** — The fitness score to beat (set by the current champion)
-- **✓** — Completed genetic lines (reached max blocks)
-- **✗** — Dead ends encountered
-- **↩** — Backtracks performed
+- **Target** - The fitness score to beat (set by the current champion)
+- **Completed** - Completed genetic lines (reached max blocks)
+- **Dead Ends** - Dead ends encountered
+- **Backtracks** - Backtracks performed
 
 ### Dead Ends and Backtracking
 When a generation fails to beat the target fitness, it's marked as a "dead end." The system then backtracks to try the next-best creature from a previous generation, exploring alternative evolutionary paths.
@@ -215,7 +258,7 @@ When a generation fails to beat the target fitness, it's marked as a "dead end."
 
 ## Evolution Tree
 
-Click the **🌳 Tree** button to open the Evolution Tree viewer — a visual representation of your entire evolutionary history.
+Click the **Tree** button to open the Evolution Tree viewer - a visual representation of your entire evolutionary history.
 
 ![Evolution Tree](/media/evolutionTree.png)
 
@@ -223,28 +266,28 @@ Click the **🌳 Tree** button to open the Evolution Tree viewer — a visual re
 
 ### Tree Legend
 
-- **[C] Champion** — Gold border, the winning creature from each generation
-- **[✓] Complete** — Green border, reached maximum block count
-- **[X] Dead End** — Red border, failed to beat target fitness
-- **[B] Branch** — Purple border, branching point in evolution
+- **[C] Champion** - Gold border, the winning creature from each generation
+- **[Complete]** - Green border, reached maximum block count
+- **[X] Dead End** - Red border, failed to beat target fitness
+- **[B] Branch** - Purple border, branching point in evolution
 
 ### Tree Controls
 
-- **↺ Reset View** — Return to default zoom and position
-- **↗ Fit to View** — Automatically frame all nodes
-- **👑 Champions Only** — Toggle to show only champion nodes
-- **Click** — Select a node to see details and enable special modes
-- **Scroll** — Zoom in/out
-- **Drag** — Pan around the tree
+- **Reset View** - Return to default zoom and position
+- **Fit to View** - Automatically frame all nodes
+- **Champions Only / Species View** - Toggle between viewing modes
+- **Click** - Select a node to see details and enable special modes
+- **Scroll** - Zoom in/out
+- **Drag** - Pan around the tree
 
 ### Tree Statistics
 
 The bottom bar shows:
-- Total Nodes — All creatures in evolutionary history
-- Champions — Successful generation winners
-- Dead Ends — Failed evolutionary paths
-- Branches — Points where evolution split
-- Species — Distinct genetic lineages
+- Total Nodes - All creatures in evolutionary history
+- Champions - Successful generation winners
+- Dead Ends - Failed evolutionary paths
+- Branches - Points where evolution split
+- Species - Distinct genetic lineages
 
 ---
 
@@ -252,28 +295,23 @@ The bottom bar shows:
 
 From the Evolution Tree, you can access three special viewing modes:
 
-### 🎬 Lineage Playback
+### Lineage Playback
 
 Watch a creature's entire evolutionary history unfold, from the very first ancestor to the selected creature. Each "day" shows one generation, with the sun moving across the sky to mark the passage of time.
 
-<video controls width="100%">
-  <source src="/media/lineagePlayback.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
 
-*Video: Lineage playback showing the evolutionary journey of a successful creature*
 
 **Controls:**
-- **⏮** — Previous generation
-- **⏸/▶** — Pause/Resume playback
-- **⏭** — Next generation
-- **Exit** — Return to normal mode
+- **Previous** - Previous generation
+- **Pause/Play** - Pause/Resume playback
+- **Next** - Next generation
+- **Exit** - Return to normal mode
 
-### 🌿 Terrarium
+### Terrarium
 
 Watch a single creature roam freely in the arena, like a pet in a terrarium. Perfect for observing interesting movement patterns up close.
 
-### 🐣 Spawn (Branch Evolution)
+### Spawn (Branch Evolution)
 
 Create a new evolutionary branch starting from the selected creature. This lets you explore "what if" scenarios and compare different evolutionary paths.
 
@@ -281,7 +319,7 @@ Create a new evolutionary branch starting from the selected creature. This lets 
 
 ## Saving and Loading
 
-### 💾 Save
+### Save
 Saves your complete simulation state to a JSON file, including:
 - All evolution history
 - Current generation and population
@@ -289,7 +327,7 @@ Saves your complete simulation state to a JSON file, including:
 - Evolution tree with all nodes
 - Current settings
 
-### 📂 Load
+### Load
 Loads a previously saved simulation. You'll see a summary before confirming:
 - Save date and time
 - Generation number
@@ -303,7 +341,7 @@ After loading, click **Start** to continue evolution from where you left off.
 
 ## Tournament Mode
 
-Click **🏆 Tournament** to pit your top champions against each other in a special competition.
+Click **Tournament** to pit your top champions against each other in a special competition.
 
 ### How Tournaments Work
 
@@ -360,6 +398,28 @@ Each round simulates a full day, from sunrise to sunset. The sun moves across th
 | Scroll wheel | Zoom camera |
 | Left drag | Rotate camera |
 | Right drag | Pan camera |
+
+---
+
+## Version History
+
+### Latest Updates
+
+#### Bug Fixes
+
+- **Fitness Formula Consistency** - Fixed inconsistency between how creature fitness was calculated in different parts of the code. All fitness formulas now match exactly across creature evaluation, evolution selection, and UI display, ensuring creatures are ranked correctly.
+
+- **Evolution Tree Toggle** - Fixed the tree display mode toggle button to correctly show the current view mode (Champions Only or Species View) rather than displaying incorrect mode names.
+
+- **Sensor Display Labels** - Fixed minor inconsistency where the Tilt sensor was abbreviated differently in different parts of the UI.
+
+- **Night Sky Fallback** - Added a beautiful procedural star texture generator as fallback when the stars.jpg texture file is unavailable. The procedural texture includes thousands of varied stars with realistic colors (white, blue, yellow) and subtle nebula regions.
+
+#### Improvements
+
+- **Null Safety** - Added defensive checks for undefined values in fitness calculations to prevent potential errors during edge cases.
+
+- **Code Documentation** - Added comments marking critical formulas that must stay synchronized across files to prevent future inconsistencies.
 
 ---
 
