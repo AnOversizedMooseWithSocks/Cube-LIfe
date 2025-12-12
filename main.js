@@ -1994,15 +1994,13 @@ class Application {
         // Initialize the toggle button text to match current mode
         const toggleBtn = document.getElementById('tree-toggle-mode');
         const currentMode = this.treeRenderer.displayMode;
-        if (currentMode === 'full') {
-            toggleBtn.textContent = '\u{1F500} Lineage Only';
-        } else if (currentMode === 'lineage') {
+        if (currentMode === 'champions') {
             toggleBtn.textContent = '\u{1F451} Champions Only';
-        } else if (currentMode === 'champions') {
-            toggleBtn.textContent = '\u{1F9EC} Species View';
+            toggleBtn.title = 'Click to switch to Species View';
         } else {
-            // species mode - next is full
-            toggleBtn.textContent = '\u{1F4CB} Full View';
+            // species mode
+            toggleBtn.textContent = '\u{1F9EC} Species View';
+            toggleBtn.title = 'Click to switch to Champions Only';
         }
         
         // Re-render after modal is visible (to ensure correct sizing)
