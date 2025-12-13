@@ -690,7 +690,7 @@
                         <span style="font-size: 10px;">&#x1F4E1; Sensors:</span>
                         <span id="sensor-description" style="font-size: 8px; color: #888;">All off</span>
                     </div>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; font-size: 9px;">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; font-size: 9px;">
                         <div title="Gravity sensor: detects orientation">
                             <span style="color: #ffaa00;">Grv</span>
                             <select id="sensor-gravity" style="width: 100%; font-size: 8px; padding: 1px;">
@@ -737,6 +737,22 @@
                                 <option value="off">Off</option>
                                 <option value="start" selected>Start</option>
                                 <option value="evolve">Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Compass sensor: detects facing direction (X axis)">
+                            <span style="color: #ff4488;">Cmp</span>
+                            <select id="sensor-compass" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
+                            </select>
+                        </div>
+                        <div title="Tracking sensor: detects position vs starting point">
+                            <span style="color: #ffff44;">Trk</span>
+                            <select id="sensor-tracking" style="width: 100%; font-size: 8px; padding: 1px;">
+                                <option value="off">Off</option>
+                                <option value="start">Start</option>
+                                <option value="evolve" selected>Evolve</option>
                             </select>
                         </div>
                     </div>

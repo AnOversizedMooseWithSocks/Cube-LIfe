@@ -26,6 +26,7 @@
 const INFLUENCE_TYPES = {
     
     // Gravity Sensor - detects orientation relative to "up"
+    // Good for balance-based behaviors
     'gravity': {
         type: 'gravity',
         name: 'Gravity Sensor',
@@ -33,6 +34,11 @@ const INFLUENCE_TYPES = {
         color: 0xffaa00,      // Orange/amber
         glowColor: 0x442200,
         weight: 1.0,
+        
+        // Which modulation methods this sensor can influence
+        // speed: affects how fast joints rotate
+        // direction: can flip rotation direction
+        modulationMethods: ['speed', 'direction'],
         
         /**
          * Calculate gravity influence based on block orientation.
@@ -57,6 +63,7 @@ const INFLUENCE_TYPES = {
     },
     
     // Light Sensor - detects direction to sun
+    // Good for phototaxis (moving toward/away from light)
     'light': {
         type: 'light',
         name: 'Light Sensor',
@@ -64,6 +71,9 @@ const INFLUENCE_TYPES = {
         color: 0x88ccff,      // Light blue
         glowColor: 0x224466,
         weight: 1.0,
+        
+        // Light can affect both speed (move faster in light) and direction (turn toward/away)
+        modulationMethods: ['speed', 'direction'],
         
         /**
          * Calculate light influence based on block facing vs sun direction.
@@ -97,6 +107,10 @@ const INFLUENCE_TYPES = {
         color: 0x44ff88,      // Green (go/speed)
         glowColor: 0x115522,
         weight: 1.0,
+        
+        // Velocity primarily affects speed - move faster when already moving
+        // Creates momentum-like behaviors
+        modulationMethods: ['speed'],
         
         /**
          * Calculate velocity influence based on body speed.
@@ -134,6 +148,10 @@ const INFLUENCE_TYPES = {
         color: 0xcc8844,      // Brown/tan (earth)
         glowColor: 0x442211,
         weight: 1.0,
+        
+        // Ground affects speed - can move differently on ground vs air
+        // Also affects direction - could change behavior when airborne
+        modulationMethods: ['speed', 'direction'],
         
         /**
          * Calculate ground contact influence based on height and vertical velocity.
@@ -185,6 +203,10 @@ const INFLUENCE_TYPES = {
         glowColor: 0x331155,
         weight: 1.0,
         
+        // Rhythm primarily affects direction - creates alternating movement patterns
+        // Can also modulate speed for pulsing intensity
+        modulationMethods: ['speed', 'direction'],
+        
         // Each oscillator block has its own phase, stored on the body
         // This allows different blocks to have different rhythms
         
@@ -234,6 +256,10 @@ const INFLUENCE_TYPES = {
         glowColor: 0x114444,
         weight: 1.0,
         
+        // Tilt is great for direction control - steer based on lean
+        // Speed modulation can help with balance corrections
+        modulationMethods: ['speed', 'direction'],
+        
         /**
          * Calculate tilt influence based on block's lateral orientation.
          * Measures how much the block's "up" vector leans left or right.
@@ -255,6 +281,106 @@ const INFLUENCE_TYPES = {
             // When tilted 90 deg right, worldUp.x = 1 (local up points world right)
             // When tilted 90 deg left, worldUp.x = -1 (local up points world left)
             return worldUp.x;
+        }
+    },
+    
+    // ========================================================================
+    // COMPASS SENSOR - detects facing direction in world space
+    // ========================================================================
+    'compass': {
+        type: 'compass',
+        name: 'Compass Sensor',
+        description: 'Detects facing direction: -1 facing backward (neg X), +1 facing forward (pos X)',
+        color: 0xff4488,      // Pink/magenta (direction/navigation)
+        glowColor: 0x441122,
+        weight: 1.0,
+        
+        // Compass is perfect for direction control - turn to face a direction
+        modulationMethods: ['direction'],
+        
+        /**
+         * Calculate compass influence based on which way the block faces in world XZ plane.
+         * Uses the block's local "forward" direction (positive Z axis) projected onto world X.
+         * This tells the creature which way it's pointing relative to the typical movement
+         * direction for distance-based fitness.
+         * 
+         * @param {CANNON.Body} body - The physics body for this block
+         * @param {Object} context - Environmental context (unused)
+         * @returns {number} -1 (facing neg X) to +1 (facing pos X)
+         */
+        calculate: function(body, context) {
+            if (!body) return 0;
+            
+            // Transform the block's local "forward" vector (0,0,1) to world space
+            // This represents the direction the block is "facing"
+            const localForward = new CANNON.Vec3(0, 0, 1);
+            const worldForward = body.quaternion.vmult(localForward);
+            
+            // Project onto XZ plane and normalize
+            const xzLength = Math.sqrt(worldForward.x * worldForward.x + worldForward.z * worldForward.z);
+            
+            if (xzLength < 0.001) {
+                // Block is facing straight up or down, no meaningful XZ direction
+                return 0;
+            }
+            
+            // The X component tells us if facing toward positive or negative X
+            // Normalize by the XZ length to get a proper -1 to +1 range
+            return worldForward.x / xzLength;
+        }
+    },
+    
+    // ========================================================================
+    // TRACKING SENSOR - detects position relative to starting location
+    // ========================================================================
+    'tracking': {
+        type: 'tracking',
+        name: 'Tracking Sensor',
+        description: 'Detects position vs start: -1 behind start, +1 ahead of start (X axis)',
+        color: 0xffff44,      // Yellow (GPS/location)
+        glowColor: 0x444411,
+        weight: 1.0,
+        
+        // Tracking affects speed - move faster/slower based on progress
+        // Also affects direction - can reverse if gone too far or not far enough
+        modulationMethods: ['speed', 'direction'],
+        
+        /**
+         * Calculate tracking influence based on displacement from starting position.
+         * Measures how far the block has moved along the X axis from where it started.
+         * This correlates with distance-based fitness modes.
+         * 
+         * The starting position is stored on the body the first time this is called,
+         * ensuring deterministic behavior across simulation runs.
+         * 
+         * @param {CANNON.Body} body - The physics body for this block
+         * @param {Object} context - Environmental context (unused)
+         * @returns {number} -1 (far behind start) to +1 (far ahead of start)
+         */
+        calculate: function(body, context) {
+            if (!body) return 0;
+            
+            // Store starting position on first calculation (like oscillator stores phase)
+            if (body.trackingStartPos === undefined) {
+                body.trackingStartPos = {
+                    x: body.position.x,
+                    y: body.position.y,
+                    z: body.position.z
+                };
+            }
+            
+            // Calculate X displacement from start
+            // Positive X is typically the "forward" direction for distance fitness
+            const displacement = body.position.x - body.trackingStartPos.x;
+            
+            // Map displacement to -1 to +1 range
+            // Use 10 units as "full scale" - creatures moving more than 10 units
+            // from start in either direction will saturate the sensor
+            const scale = 10.0;
+            const normalized = displacement / scale;
+            
+            // Clamp to -1 to +1
+            return Math.max(-1.0, Math.min(1.0, normalized));
         }
     }
     
@@ -352,6 +478,8 @@ function maybeAssignInfluenceType(rng, probability = 0.05) {
  * Mutate a joint's influence responses.
  * Called during creature mutation to evolve how joints react to influences.
  * 
+ * Handles both legacy format {channel: weight} and new format {channel: {method: weight}}
+ * 
  * @param {Object} responses - The joint's influenceResponses object
  * @param {SeededRandom} rng - Seeded random number generator
  * @param {string[]} availableChannels - Channels the creature has providers for
@@ -359,8 +487,16 @@ function maybeAssignInfluenceType(rng, probability = 0.05) {
  * @returns {Object} The mutated responses object
  */
 function mutateInfluenceResponses(responses, rng, availableChannels, mutationChance = 0.2) {
-    // Clone the responses to avoid modifying original
-    const mutated = { ...responses };
+    // Deep clone the responses to avoid modifying original
+    const mutated = {};
+    for (const [channel, response] of Object.entries(responses)) {
+        if (typeof response === 'object') {
+            mutated[channel] = { ...response };
+        } else {
+            // Convert legacy format to new format
+            mutated[channel] = { speed: response };
+        }
+    }
     
     // Skip mutation most of the time
     if (rng.random() > mutationChance) {
@@ -370,31 +506,54 @@ function mutateInfluenceResponses(responses, rng, availableChannels, mutationCha
     const action = rng.random();
     
     if (action < 0.4 && availableChannels.length > 0) {
-        // Add or strengthen a response to an available channel
+        // Add or modify a response to an available channel
         const channel = availableChannels[rng.randomInt(0, availableChannels.length)];
-        const current = mutated[channel] || 0;
+        const sensorType = INFLUENCE_TYPES[channel];
+        const methods = sensorType?.modulationMethods || ['speed'];
+        
+        // Pick a random method this sensor supports
+        const method = methods[rng.randomInt(0, methods.length)];
+        
+        // Initialize channel response if needed
+        if (!mutated[channel]) {
+            mutated[channel] = {};
+        }
+        
+        const current = mutated[channel][method] || 0;
         const delta = rng.randomFloat(-0.3, 0.4);  // Slight bias toward strengthening
         const newValue = Math.max(-1, Math.min(1, current + delta));
         
-        if (Math.abs(newValue) < 0.05) {
-            // Remove very weak responses
-            delete mutated[channel];
+        if (Math.abs(newValue) < 0.1) {
+            // Remove very weak method responses
+            delete mutated[channel][method];
+            // Remove channel if no methods left
+            if (Object.keys(mutated[channel]).length === 0) {
+                delete mutated[channel];
+            }
         } else {
-            mutated[channel] = newValue;
+            mutated[channel][method] = newValue;
         }
         
     } else if (action < 0.7 && Object.keys(mutated).length > 0) {
         // Modify an existing response
         const channels = Object.keys(mutated);
         const channel = channels[rng.randomInt(0, channels.length)];
-        const current = mutated[channel];
-        const delta = rng.randomFloat(-0.25, 0.25);
-        const newValue = Math.max(-1, Math.min(1, current + delta));
+        const methods = Object.keys(mutated[channel]);
         
-        if (Math.abs(newValue) < 0.05) {
-            delete mutated[channel];
-        } else {
-            mutated[channel] = newValue;
+        if (methods.length > 0) {
+            const method = methods[rng.randomInt(0, methods.length)];
+            const current = mutated[channel][method];
+            const delta = rng.randomFloat(-0.25, 0.25);
+            const newValue = Math.max(-1, Math.min(1, current + delta));
+            
+            if (Math.abs(newValue) < 0.1) {
+                delete mutated[channel][method];
+                if (Object.keys(mutated[channel]).length === 0) {
+                    delete mutated[channel];
+                }
+            } else {
+                mutated[channel][method] = newValue;
+            }
         }
         
     } else if (Object.keys(mutated).length > 0 && rng.random() < 0.3) {
@@ -411,9 +570,17 @@ function mutateInfluenceResponses(responses, rng, availableChannels, mutationCha
  * Apply influence modulation to a base rotation value.
  * This is the core formula that determines how influences affect joint movement.
  * 
+ * Supports multiple modulation methods:
+ * - speed: scales the rotation magnitude (0 = stopped, 2 = double speed)
+ * - direction: can flip the rotation direction when influence is strong enough
+ * 
+ * Response format can be either:
+ * - Legacy: {channelName: weight} - applies to speed only
+ * - New: {channelName: {speed: weight, direction: weight}}
+ * 
  * @param {number} baseRotation - The unmodulated rotation delta
  * @param {Object} influences - Current influence channel values {channelName: value}
- * @param {Object} responses - Joint's response weights {channelName: weight}
+ * @param {Object} responses - Joint's response weights
  * @returns {number} The modulated rotation delta
  */
 function applyInfluenceModulation(baseRotation, influences, responses) {
@@ -421,27 +588,50 @@ function applyInfluenceModulation(baseRotation, influences, responses) {
         return baseRotation;
     }
     
-    let modifier = 1.0;
+    let speedModifier = 1.0;
+    let directionModifier = 1.0;
     
     // Apply each response this joint has
-    for (const [channel, weight] of Object.entries(responses)) {
-        if (channel in influences) {
-            const influenceValue = influences[channel];
+    for (const [channel, response] of Object.entries(responses)) {
+        if (!(channel in influences)) continue;
+        
+        const influenceValue = influences[channel];
+        
+        // Handle both legacy format (single weight) and new format (method weights)
+        if (typeof response === 'number') {
+            // Legacy format: single weight applies to speed
+            const effect = influenceValue * response * 0.5;
+            speedModifier += effect;
+        } else if (typeof response === 'object') {
+            // New format: separate weights per method
             
-            // Modulation formula:
-            // - weight and influence both positive: speed up
-            // - weight and influence opposite signs: slow down
-            // - The 0.5 factor limits the effect to +/-50% per channel
-            const effect = influenceValue * weight * 0.5;
-            modifier += effect;
+            // Speed modulation: scales rotation magnitude
+            if (response.speed !== undefined) {
+                const effect = influenceValue * response.speed * 0.5;
+                speedModifier += effect;
+            }
+            
+            // Direction modulation: can flip rotation direction
+            // When influence * weight exceeds threshold, direction flips
+            if (response.direction !== undefined) {
+                const effect = influenceValue * response.direction;
+                // Accumulate direction effects - strong negative flips direction
+                // effect > 0.5: reinforce direction
+                // effect < -0.5: flip direction
+                directionModifier += effect * 0.5;
+            }
         }
     }
     
-    // Clamp modifier to reasonable range
-    // 0 = stopped, 2 = double speed
-    modifier = Math.max(0, Math.min(2.0, modifier));
+    // Clamp speed modifier to reasonable range (0 = stopped, 2 = double speed)
+    speedModifier = Math.max(0, Math.min(2.0, speedModifier));
     
-    return baseRotation * modifier;
+    // Direction modifier: if it goes negative, flip direction
+    // Clamp to -1 to 1 range, then use sign
+    directionModifier = Math.max(-1.5, Math.min(1.5, directionModifier));
+    const directionSign = directionModifier >= 0 ? 1 : -1;
+    
+    return baseRotation * speedModifier * directionSign;
 }
 
 
@@ -477,6 +667,11 @@ function findInfluenceProviders(creature) {
  * Update all influence channel values for a creature.
  * Call this each frame before updating joints.
  * 
+ * The influence value is flipped (negated) based on which face the sensor
+ * block is attached by. Even faces (0, 2, 4) give normal values, while
+ * odd faces (1, 3, 5) flip the sign. This allows sensors on opposite sides
+ * of a creature to produce complementary responses.
+ * 
  * @param {Creature} creature - The creature to update
  * @param {Object} context - Environmental context {sunDirection, dayProgress, etc.}
  * @returns {Object} The updated influences map {channelName: value}
@@ -493,7 +688,21 @@ function updateCreatureInfluences(creature, context) {
         if (!body) continue;
         
         // Calculate influence using the registered type's function
-        const value = calculateInfluence(provider.channelName, body, context);
+        let value = calculateInfluence(provider.channelName, body, context);
+        
+        // Find the joint that connects this sensor block to its parent
+        // to determine which face it's attached by
+        const blockIndex = provider.blockIndex;
+        if (blockIndex > 0) {  // Block 0 has no parent/joint
+            const joint = creature.joints.find(j => j.blockIndexB === blockIndex);
+            if (joint) {
+                // faceB is the face on this block that connects to the parent
+                // Odd faces (1, 3, 5) flip the influence value
+                if (joint.faceB % 2 === 1) {
+                    value = -value;
+                }
+            }
+        }
         
         // Store the value (if multiple blocks provide same channel, last wins)
         influences[provider.channelName] = value;
@@ -560,7 +769,9 @@ const SensorConfig = {
         'velocity': 'off',
         'ground': 'off',
         'rhythm': 'off',
-        'tilt': 'off'
+        'tilt': 'off',
+        'compass': 'off',
+        'tracking': 'off'
     },
     
     /**

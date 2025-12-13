@@ -77,7 +77,9 @@ class Simulation {
         this.onFollowLeaderChanged = null;
         
         this.isCelebrating = false;
+        this.isDeathSequence = false; // True if this is a death sequence (dead end), not celebration
         this.celebrationDebris = [];
+        this.risingStars = [];  // Tiles that rise to become stars during death sequence
         this.spotlight = null;
         this.spotlightTarget = null;
         this.celebrationStartTime = 0;
@@ -924,6 +926,7 @@ class Simulation {
         this.tileInstanceMesh.castShadow = false;
         this.tileInstanceMesh.receiveShadow = false;
         this.tileInstanceMesh.frustumCulled = false;
+        this.tileInstanceMesh.renderOrder = -1;  // Render before creatures to stay behind them
         
         this.scene.add(this.tileInstanceMesh);
         
@@ -1444,29 +1447,37 @@ class Simulation {
         
         if (influenceType === 'gravity') {
             // Gravity sensor: small pendulum sphere that hangs "down"
+            // Position clearly below the block (block bottom is at y = -0.5)
             const pendulumGeo = new THREE.SphereGeometry(0.12, 8, 8);
             const pendulumMat = new THREE.MeshPhongMaterial({
                 color: config.color,
                 emissive: config.glowColor,
-                emissiveIntensity: 0.4
+                emissiveIntensity: 0.4,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const pendulum = new THREE.Mesh(pendulumGeo, pendulumMat);
-            pendulum.position.y = -0.3;
+            pendulum.position.y = -0.65;  // Moved further down (was -0.3)
             mesh.add(pendulum);
             mesh.userData.influenceVisual = pendulum;
             
         } else if (influenceType === 'light') {
             // Light sensor: lens/eye on top that glows when facing sun
+            // Position clearly above the block (block top is at y = 0.5)
             const lensGeo = new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
             const lensMat = new THREE.MeshPhongMaterial({
                 color: config.color,
                 emissive: config.glowColor,
                 emissiveIntensity: 0.3,
                 transparent: true,
-                opacity: 0.85
+                opacity: 0.85,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const lens = new THREE.Mesh(lensGeo, lensMat);
-            lens.position.y = 0.45;
+            lens.position.y = 0.55;  // Moved up slightly (was 0.45)
             mesh.add(lens);
             mesh.userData.influenceVisual = lens;
             
@@ -1477,11 +1488,14 @@ class Simulation {
             const arrowMat = new THREE.MeshPhongMaterial({
                 color: config.color,
                 emissive: config.glowColor,
-                emissiveIntensity: 0.4
+                emissiveIntensity: 0.4,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const arrow = new THREE.Mesh(arrowGeo, arrowMat);
             arrow.rotation.x = Math.PI / 2;  // Point forward (along Z)
-            arrow.position.z = 0.4;
+            arrow.position.z = 0.55;  // Moved out (was 0.4)
             arrow.position.y = 0;
             mesh.add(arrow);
             mesh.userData.influenceVisual = arrow;
@@ -1492,10 +1506,13 @@ class Simulation {
             const padMat = new THREE.MeshPhongMaterial({
                 color: config.color,
                 emissive: config.glowColor,
-                emissiveIntensity: 0.3
+                emissiveIntensity: 0.3,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const pad = new THREE.Mesh(padGeo, padMat);
-            pad.position.y = -0.46;
+            pad.position.y = -0.55;  // Moved down (was -0.46)
             mesh.add(pad);
             
             // Add small contact bumps
@@ -1503,7 +1520,7 @@ class Simulation {
             const positions = [[0.12, 0], [-0.12, 0], [0, 0.12], [0, -0.12]];
             for (const [x, z] of positions) {
                 const bump = new THREE.Mesh(bumpGeo, padMat);
-                bump.position.set(x, -0.5, z);
+                bump.position.set(x, -0.6, z);  // Moved down (was -0.5)
                 mesh.add(bump);
             }
             mesh.userData.influenceVisual = pad;
@@ -1516,14 +1533,18 @@ class Simulation {
                 emissive: config.glowColor,
                 emissiveIntensity: 0.5,
                 transparent: true,
-                opacity: 0.9
+                opacity: 0.9,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const ring = new THREE.Mesh(ringGeo, ringMat);
             ring.rotation.x = Math.PI / 2;  // Lay flat
-            ring.position.y = 0.45;
+            ring.position.y = 0.55;  // Moved up (was 0.45)
             mesh.add(ring);
             mesh.userData.influenceVisual = ring;
-            mesh.userData.rhythmPhase = Math.random() * Math.PI * 2;  // Random starting phase
+            // Note: Actual rhythm phase is calculated deterministically in influence-system.js
+            // based on body position, ensuring reproducible behavior
             
         } else if (influenceType === 'tilt') {
             // Tilt sensor: balance beam/level indicator
@@ -1531,24 +1552,169 @@ class Simulation {
             const beamMat = new THREE.MeshPhongMaterial({
                 color: config.color,
                 emissive: config.glowColor,
-                emissiveIntensity: 0.4
+                emissiveIntensity: 0.4,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             const beam = new THREE.Mesh(beamGeo, beamMat);
-            beam.position.y = 0.45;
+            beam.position.y = 0.55;  // Moved up (was 0.45)
             mesh.add(beam);
             
             // Add small balls at each end to emphasize the balance
             const ballGeo = new THREE.SphereGeometry(0.06, 8, 8);
             const leftBall = new THREE.Mesh(ballGeo, beamMat);
-            leftBall.position.set(-0.2, 0.45, 0);
+            leftBall.position.set(-0.2, 0.55, 0);  // Moved up (was 0.45)
             mesh.add(leftBall);
             const rightBall = new THREE.Mesh(ballGeo, beamMat);
-            rightBall.position.set(0.2, 0.45, 0);
+            rightBall.position.set(0.2, 0.55, 0);  // Moved up (was 0.45)
             mesh.add(rightBall);
             
             mesh.userData.influenceVisual = beam;
+            
+        } else if (influenceType === 'compass') {
+            // Compass sensor: needle/arrow pointing in facing direction
+            // Diamond shape like a compass needle
+            const needleGeo = new THREE.ConeGeometry(0.08, 0.3, 4);
+            const needleMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.5,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
+            });
+            const needle = new THREE.Mesh(needleGeo, needleMat);
+            needle.rotation.x = Math.PI / 2;  // Point forward (along Z)
+            needle.position.set(0, 0.55, 0.1);  // Moved up (was 0.45)
+            mesh.add(needle);
+            
+            // Add small compass circle base
+            const baseGeo = new THREE.TorusGeometry(0.15, 0.02, 8, 16);
+            const baseMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.3,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
+            });
+            const base = new THREE.Mesh(baseGeo, baseMat);
+            base.rotation.x = Math.PI / 2;  // Lay flat
+            base.position.y = 0.55;  // Moved up (was 0.45)
+            mesh.add(base);
+            
+            mesh.userData.influenceVisual = needle;
+            
+        } else if (influenceType === 'tracking') {
+            // Tracking sensor: GPS/beacon marker
+            // Teardrop/pin shape pointing up
+            const pinGeo = new THREE.SphereGeometry(0.12, 8, 8);
+            const pinMat = new THREE.MeshPhongMaterial({
+                color: config.color,
+                emissive: config.glowColor,
+                emissiveIntensity: 0.5,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
+            });
+            const pin = new THREE.Mesh(pinGeo, pinMat);
+            pin.position.y = 0.65;  // Moved up (was 0.5)
+            mesh.add(pin);
+            
+            // Add small antenna/stem
+            const stemGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.15, 6);
+            const stem = new THREE.Mesh(stemGeo, pinMat);
+            stem.position.y = 0.8;  // Moved up (was 0.65)
+            mesh.add(stem);
+            
+            // Add small signal rings (like GPS waves)
+            const ringGeo = new THREE.TorusGeometry(0.08, 0.015, 6, 12);
+            const ring1 = new THREE.Mesh(ringGeo, pinMat);
+            ring1.rotation.x = Math.PI / 2;
+            ring1.position.y = 0.87;  // Moved up (was 0.72)
+            mesh.add(ring1);
+            
+            mesh.userData.influenceVisual = pin;
         }
         // Additional influence types can be added here
+        
+        // =====================================================================
+        // SENSOR GLOW SETUP
+        // Make the main block material glow based on sensor output.
+        // We use the block's own color for the glow, making it feel natural.
+        // Both MeshLambertMaterial and MeshPhongMaterial support emissive.
+        // =====================================================================
+        
+        // Get the block's actual color from its material
+        const blockColor = mesh.material.color.clone();
+        
+        // Store the glow color (based on block's own color)
+        mesh.userData.sensorGlowColor = blockColor;
+        
+        // Set up emissive properties for the glow effect
+        // Most Three.js materials (Lambert, Phong, Standard) support emissive
+        if (mesh.material) {
+            mesh.material.emissive = blockColor;
+            mesh.material.emissiveIntensity = 0.0;  // Starts off, updated by sensor value
+        }
+        
+        // Mark this mesh as a sensor for the update loop
+        mesh.userData.isSensor = true;
+    }
+    
+    /**
+     * Update the glow intensity of sensor blocks based on their current output values.
+     * Called each frame after influences are calculated.
+     * 
+     * Uses smoothing to gradually transition glow intensity rather than jumping
+     * directly to new values. This looks better and reduces visual noise.
+     * 
+     * @param {Creature} creature - The creature whose sensors to update
+     */
+    updateSensorGlow(creature) {
+        if (!creature.influenceProviders || creature.influenceProviders.length === 0) {
+            return;
+        }
+        
+        // Smoothing factor - higher value since we update less frequently (~20fps)
+        // This gives a nice organic fade without being sluggish
+        const smoothing = 0.15;
+        
+        for (const provider of creature.influenceProviders) {
+            const mesh = creature.meshes[provider.blockIndex];
+            if (!mesh || !mesh.userData.isSensor) continue;
+            
+            // Get the current sensor output value (-1 to +1)
+            const sensorValue = creature.influences[provider.channelName] || 0;
+            
+            // Calculate target glow intensity from the value
+            // Use absolute value so both positive and negative trigger glow
+            const absValue = Math.abs(sensorValue);
+            const targetIntensity = absValue * 1.0;  // Range: 0 to 1 (capped)
+            
+            // Initialize current intensity if not set
+            if (mesh.userData.currentGlowIntensity === undefined) {
+                mesh.userData.currentGlowIntensity = 0;
+            }
+            
+            // Smoothly interpolate toward the target intensity (lerp)
+            const currentIntensity = mesh.userData.currentGlowIntensity;
+            const newIntensity = currentIntensity + (targetIntensity - currentIntensity) * smoothing;
+            mesh.userData.currentGlowIntensity = newIntensity;
+            
+            // Update the main block material emissive intensity
+            if (mesh.material && mesh.material.emissiveIntensity !== undefined) {
+                mesh.material.emissiveIntensity = newIntensity;
+            }
+            
+            // Update the visual indicator's intensity as well
+            const visual = mesh.userData.influenceVisual;
+            if (visual && visual.material && visual.material.emissiveIntensity !== undefined) {
+                // Visual indicator glows brighter than the block
+                visual.material.emissiveIntensity = 0.3 + newIntensity;
+            }
+        }
     }
     
     spawnMultipleCreatures(creatures) {
@@ -1737,6 +1903,291 @@ class Simulation {
                 orbitAngle: Math.random() * Math.PI * 2,
                 orbitSpeed: 3 + Math.random() * 2,
                 orbitDirection: Math.random() < 0.5 ? 1 : -1
+            };
+            
+            this.celebrationDebris.push(debris);
+            
+            if (body) {
+                this.world.removeBody(body);
+            }
+        }
+        
+        for (let c of creature.constraints) {
+            this.world.removeConstraint(c);
+        }
+        
+        creature.meshes = [];
+        creature.bodies = [];
+        creature.constraints = [];
+    }
+    
+    /**
+     * Start a death sequence when evolution hits a dead end.
+     * All creatures collapse/dissolve with somber visual effects - no celebration.
+     * 
+     * @param {Creature} bestCreature - The best creature from this failed generation (for focus)
+     * @param {Function} onComplete - Callback when death sequence completes
+     */
+    startDeathSequence(bestCreature, onComplete) {
+        this.isCelebrating = true; // Reuse the celebration flag to block other updates
+        this.celebrationStartTime = Date.now();
+        this.celebrationCallback = onComplete;
+        this.spotlightTarget = bestCreature;
+        
+        this.celebrationPhase = 0;
+        this.isDeathSequence = true; // Flag to differentiate from celebration
+        
+        // Hide crown - no winner here
+        if (this.crownGroup) {
+            this.crownGroup.visible = false;
+        }
+        
+        // Get center point (best creature or arena center)
+        // Store this position for camera to use even after creature is destroyed
+        let center = new THREE.Vector3(0, 3, 0);
+        if (bestCreature && bestCreature.bodies && bestCreature.bodies.length > 0) {
+            center = this.getCreatureCenterOfMass(bestCreature);
+        }
+        this.deathSequenceFocusPoint = center.clone(); // Store for camera reference
+        
+        // Somber visual effects - dark dust cloud and sparks
+        this.visualEffects.spawnDustParticles(center, 5.0); // Heavy dust
+        
+        // Spawn dark/red sparks for each creature - signifying failure
+        for (let creature of this.activeCreatures) {
+            const creatureCenter = this.getCreatureCenterOfMass(creature);
+            
+            // Dark red sparks
+            this.visualEffects.spawnSparkParticles(creatureCenter, new THREE.Color(0x881111));
+            
+            // Make creatures fade to gray and collapse
+            if (creature.meshes) {
+                for (let mesh of creature.meshes) {
+                    mesh.userData.deathStartTime = Date.now();
+                    mesh.userData.originalColor = mesh.material.color.clone();
+                }
+            }
+        }
+        
+        // === CREATE RISING STARS FROM LIT TILES ===
+        // Each lit tile will rise up to become a star in the sky
+        // Use the best creature's tile order (preserves the path they walked)
+        this.risingStars = [];
+        
+        // Get tiles in the order the creature created them
+        let tileKeys = [];
+        if (bestCreature && bestCreature.tilesLit && bestCreature.tilesLit.length > 0) {
+            // Use the creature's recorded path order
+            tileKeys = [...bestCreature.tilesLit];
+            console.log(`[DEATH] Using bestCreature.tilesLit: ${tileKeys.length} tiles`);
+        } else {
+            // Fallback: Try to find tiles from any active creature
+            console.log(`[DEATH] bestCreature has no tilesLit, checking activeCreatures...`);
+            
+            // First try: collect tiles from all active creatures
+            for (const creature of this.activeCreatures) {
+                if (creature && creature.tilesLit && creature.tilesLit.length > 0) {
+                    // Use the creature with the most tiles (likely the leader)
+                    if (creature.tilesLit.length > tileKeys.length) {
+                        tileKeys = [...creature.tilesLit];
+                    }
+                }
+            }
+            
+            if (tileKeys.length > 0) {
+                console.log(`[DEATH] Found ${tileKeys.length} tiles from activeCreatures`);
+            } else {
+                // Final fallback: use the global litTiles set
+                tileKeys = Array.from(this.litTiles);
+                console.log(`[DEATH] Fallback to this.litTiles: ${tileKeys.length} tiles`);
+            }
+            
+            if (bestCreature) {
+                console.log(`[DEATH] bestCreature.tilesLit was: ${bestCreature.tilesLit ? bestCreature.tilesLit.length : 'undefined'}`);
+            } else {
+                console.log(`[DEATH] bestCreature was null/undefined`);
+            }
+        }
+        
+        // Debug: log tileKeyToIndex map size
+        console.log(`[DEATH] tileKeyToIndex map has ${this.tileKeyToIndex ? this.tileKeyToIndex.size : 0} entries`);
+        
+        // If no tiles, log warning and return early
+        if (tileKeys.length === 0) {
+            console.warn(`[DEATH] No tiles found for rising stars effect!`);
+        }
+        
+        // Cap the number of stars to avoid performance issues with huge tile counts
+        const maxStars = 500;
+        if (tileKeys.length > maxStars) {
+            // Keep first maxStars tiles (the beginning of their journey)
+            tileKeys = tileKeys.slice(0, maxStars);
+        }
+        
+        // Create star objects for each tile - they'll launch one by one in creation order
+        // Shared geometry for all stars (efficient)
+        const starGeometry = new THREE.PlaneGeometry(0.15, 0.15);
+        this.starGeometry = starGeometry; // Store reference for cleanup
+        
+        // === TIMING CALCULATION ===
+        // Total sequence is 5000ms. ALL tiles must finish rising by ~4800ms.
+        // Each tile needs: launch_delay + rise_duration < 4800ms
+        // 
+        // Strategy: Dynamically adjust both launch window and rise duration based on tile count
+        // - More tiles = faster launch rate AND faster rise
+        // - This ensures ALL tiles complete regardless of count
+        const sequenceEnd = 4800;  // Must be done by this time (200ms buffer before 5000ms end)
+        const minRiseDuration = 800;   // Minimum rise time for visual quality
+        const maxRiseDuration = 2000;  // Maximum rise time for few tiles
+        const tileCount = tileKeys.length;
+        
+        // Calculate rise duration - scales down with more tiles
+        // With few tiles (< 50), use max duration. With many (500+), use min duration.
+        const riseScale = Math.max(0, Math.min(1, (500 - tileCount) / 450));
+        const baseRiseDuration = minRiseDuration + (maxRiseDuration - minRiseDuration) * riseScale;
+        
+        // Launch window = time available minus rise duration
+        // This ensures the last tile has time to fully rise
+        const launchWindow = Math.max(500, sequenceEnd - baseRiseDuration);
+        const staggerDelay = tileCount > 0 ? launchWindow / tileCount : 30;
+        
+        // Matrix for hiding tiles (moves them far below ground)
+        this.hideTileMatrix = new THREE.Matrix4().makeTranslation(0, -1000, 0);
+        
+        let missingInstanceCount = 0;
+        for (let i = 0; i < tileKeys.length; i++) {
+            const key = tileKeys[i];
+            const [tileX, tileZ] = key.split(',').map(Number);
+            
+            // Calculate world position of tile center
+            const worldX = (tileX + 0.5) * this.tileWorldSize;
+            const worldZ = (tileZ + 0.5) * this.tileWorldSize;
+            
+            // Get the instance index for this tile so we can hide it when the star launches
+            const instanceIndex = this.tileKeyToIndex.get(key);
+            if (instanceIndex === undefined) {
+                missingInstanceCount++;
+            }
+            
+            // Create a glowing star material (invisible initially - tile is still showing)
+            const starMaterial = new THREE.MeshBasicMaterial({
+                color: 0x88ccff,  // Start as the tile's cyan color
+                transparent: true,
+                opacity: 0,  // Start invisible - will fade in when launching
+                side: THREE.DoubleSide
+            });
+            
+            const starMesh = new THREE.Mesh(starGeometry, starMaterial);
+            starMesh.position.set(worldX, 0.03, worldZ);  // Start at ground level
+            starMesh.rotation.x = -Math.PI / 2;  // Flat on ground initially
+            this.scene.add(starMesh);
+            
+            // Each star has a delay before it starts rising (in creation order)
+            this.risingStars.push({
+                mesh: starMesh,
+                tileKey: key,
+                tileInstanceIndex: instanceIndex,  // To hide the ground tile when launching
+                startX: worldX,
+                startZ: worldZ,
+                targetY: 25 + Math.random() * 15,  // Lower target height (was 80-120)
+                // Less horizontal spread as they rise
+                targetX: worldX + (Math.random() - 0.5) * 20,
+                targetZ: worldZ + (Math.random() - 0.5) * 20,
+                launchDelay: i * staggerDelay,  // Staggered launch times IN ORDER
+                launchTime: null,  // Set when star actually launches
+                phase: 'waiting',  // waiting -> rising -> star
+                // Rise duration scales with tile count - more tiles = faster rise
+                // Small random variation (±10%) for visual interest
+                riseDuration: baseRiseDuration * (0.9 + Math.random() * 0.2),
+                twinkleOffset: Math.random() * Math.PI * 2,  // For twinkling effect
+                tileHidden: false,  // Track if we've hidden the ground tile
+                // Random rotation speeds for tumbling effect
+                angularVelocity: {
+                    x: (Math.random() - 0.5) * 3,
+                    y: (Math.random() - 0.5) * 3,
+                    z: (Math.random() - 0.5) * 3
+                }
+            });
+        }
+        
+        // Summary logging
+        console.log(`[DEATH] Created ${this.risingStars.length} rising stars`);
+        if (missingInstanceCount > 0) {
+            console.log(`[DEATH] ${missingInstanceCount} tiles had no visual instance (may have hit tile limit)`);
+        }
+        
+        // Log timing calculation for debugging
+        if (tileKeys.length > 0) {
+            const lastLaunch = (tileKeys.length - 1) * staggerDelay;
+            const lastComplete = lastLaunch + baseRiseDuration;
+            console.log(`[DEATH] Rising stars timing: ${tileKeys.length} tiles, ` +
+                `launch window: ${launchWindow.toFixed(0)}ms, ` +
+                `rise duration: ${baseRiseDuration.toFixed(0)}ms, ` +
+                `last tile completes: ~${lastComplete.toFixed(0)}ms`);
+        }
+        
+        // Keep the instanced tile mesh VISIBLE - tiles will be hidden individually as they launch
+        // (Don't hide tileInstanceMesh here)
+        
+        // After a brief moment, all creatures collapse
+        setTimeout(() => {
+            if (!this.isCelebrating) return;
+            
+            // Explode all creatures with muted colors
+            for (let creature of this.activeCreatures) {
+                this.explodeCreatureWithDeath(creature);
+                
+                const loserCenter = this.getCreatureCenterOfMass(creature);
+                // Dark dust instead of colorful fireworks
+                this.visualEffects.spawnDustParticles(loserCenter, 3.0);
+            }
+        }, 800);
+        
+        // Camera movement is handled in updateCamera() - it will smoothly tilt up
+        // to follow the rising stars while staying focused on the leader's position
+    }
+    
+    /**
+     * Ascend creature blocks during death sequence.
+     * Blocks rise up to join the stars rather than crumbling.
+     * 
+     * @param {Creature} creature - The creature to ascend
+     */
+    explodeCreatureWithDeath(creature) {
+        if (!creature || !creature.meshes) return;
+        
+        const center = this.getCreatureCenterOfMass(creature);
+        
+        for (let i = 0; i < creature.meshes.length; i++) {
+            const mesh = creature.meshes[i];
+            const body = creature.bodies[i];
+            
+            // Store starting position for ascent animation
+            const startPos = mesh.position.clone();
+            
+            // Each block rises to a different height in the sky
+            // Stagger the launch times so they rise one by one
+            const debris = {
+                mesh: mesh,
+                startPosition: startPos,
+                targetY: 25 + Math.random() * 15,  // Match tile heights (was 70-120)
+                // Slight horizontal drift as they rise
+                targetX: startPos.x + (Math.random() - 0.5) * 15,
+                targetZ: startPos.z + (Math.random() - 0.5) * 15,
+                velocity: new THREE.Vector3(0, 0, 0),  // Not used for physics, just for trail effects
+                angularVelocity: new THREE.Vector3(
+                    (Math.random() - 0.5) * 2,
+                    (Math.random() - 0.5) * 2,
+                    (Math.random() - 0.5) * 2
+                ),
+                phase: 'death_ascend',  // New phase for ascending
+                launchDelay: i * 80 + Math.random() * 150,  // Staggered launches (slightly faster)
+                launchTime: null,
+                riseDuration: 1800 + Math.random() * 600,  // Faster rise to finish in time
+                phaseStartTime: Date.now(),
+                originalColor: mesh.material.color.getHex(),
+                absorbed: false,
+                isDeath: true
             };
             
             this.celebrationDebris.push(debris);
@@ -2015,55 +2466,139 @@ class Simulation {
         if (elapsed - this.lastCelebrationParticleTime > particleInterval) {
             this.lastCelebrationParticleTime = elapsed;
             
-            for (let i = 0; i < 8; i++) {
-                const pos = new THREE.Vector3(
-                    championCenter.x + (Math.random() - 0.5) * 30,
-                    championCenter.y + 15 + Math.random() * 10,
-                    championCenter.z + (Math.random() - 0.5) * 30
-                );
-                this.visualEffects.spawnConfettiBurst(pos, 5);
+            // Only spawn celebration particles if NOT a death sequence
+            if (!this.isDeathSequence) {
+                for (let i = 0; i < 8; i++) {
+                    const pos = new THREE.Vector3(
+                        championCenter.x + (Math.random() - 0.5) * 30,
+                        championCenter.y + 15 + Math.random() * 10,
+                        championCenter.z + (Math.random() - 0.5) * 30
+                    );
+                    this.visualEffects.spawnConfettiBurst(pos, 5);
+                }
+                
+                if (Math.random() < 0.4) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 10 + Math.random() * 20;
+                    const pos = new THREE.Vector3(
+                        championCenter.x + Math.cos(angle) * dist,
+                        10 + Math.random() * 15,
+                        championCenter.z + Math.sin(angle) * dist
+                    );
+                    const color = new THREE.Color().setHSL(Math.random(), 1.0, 0.6);
+                    this.visualEffects.spawnFireworkBurst(pos, color, 60);
+                }
+                
+                for (let i = 0; i < 3; i++) {
+                    const offset = new THREE.Vector3(
+                        (Math.random() - 0.5) * 3,
+                        -1,
+                        (Math.random() - 0.5) * 3
+                    );
+                    this.visualEffects.spawnGlowParticle(championCenter.clone().add(offset), new THREE.Color(0x64ffda));
+                }
+                
+                if (Math.random() < 0.3) {
+                    this.visualEffects.spawnEnergyRing(championCenter, new THREE.Color(0x4488ff));
+                }
+                
+                if (elapsed % 1000 < particleInterval) {
+                    this.visualEffects.spawnStarBurst(championCenter, 15);
+                }
+            } else {
+                // Death sequence: occasional dark dust particles
+                if (Math.random() < 0.2) {
+                    this.visualEffects.spawnDustParticles(championCenter, 0.5);
+                }
             }
+        }
+        
+        // === UPDATE RISING STARS (Death sequence only) ===
+        if (this.isDeathSequence && this.risingStars && this.risingStars.length > 0) {
+            const now = Date.now();
             
-            if (Math.random() < 0.4) {
-                const angle = Math.random() * Math.PI * 2;
-                const dist = 10 + Math.random() * 20;
-                const pos = new THREE.Vector3(
-                    championCenter.x + Math.cos(angle) * dist,
-                    10 + Math.random() * 15,
-                    championCenter.z + Math.sin(angle) * dist
-                );
-                const color = new THREE.Color().setHSL(Math.random(), 1.0, 0.6);
-                this.visualEffects.spawnFireworkBurst(pos, color, 60);
-            }
-            
-            for (let i = 0; i < 3; i++) {
-                const offset = new THREE.Vector3(
-                    (Math.random() - 0.5) * 3,
-                    -1,
-                    (Math.random() - 0.5) * 3
-                );
-                this.visualEffects.spawnGlowParticle(championCenter.clone().add(offset), new THREE.Color(0x64ffda));
-            }
-            
-            if (Math.random() < 0.3) {
-                this.visualEffects.spawnEnergyRing(championCenter, new THREE.Color(0x4488ff));
-            }
-            
-            if (elapsed % 1000 < particleInterval) {
-                this.visualEffects.spawnStarBurst(championCenter, 15);
+            for (let star of this.risingStars) {
+                // Check if it's time to launch this star
+                if (star.phase === 'waiting') {
+                    if (elapsed >= star.launchDelay) {
+                        star.phase = 'rising';
+                        star.launchTime = now;
+                        
+                        // Hide the ground tile by moving its instance far below ground
+                        if (!star.tileHidden && star.tileInstanceIndex !== undefined && this.tileInstanceMesh) {
+                            this.tileInstanceMesh.setMatrixAt(star.tileInstanceIndex, this.hideTileMatrix);
+                            this.tileInstanceMesh.instanceMatrix.needsUpdate = true;
+                            star.tileHidden = true;
+                        }
+                    }
+                    continue;
+                }
+                
+                // Animate rising stars
+                if (star.phase === 'rising') {
+                    const riseElapsed = now - star.launchTime;
+                    const riseProgress = Math.min(1, riseElapsed / star.riseDuration);
+                    const deltaTime = 1/60;  // Approximate frame time
+                    
+                    // Ease-in curve: starts slow, then accelerates (quadratic)
+                    const easedProgress = riseProgress * riseProgress;
+                    
+                    // Interpolate position from ground to sky
+                    star.mesh.position.x = star.startX + (star.targetX - star.startX) * easedProgress;
+                    star.mesh.position.y = 0.03 + (star.targetY - 0.03) * easedProgress;
+                    star.mesh.position.z = star.startZ + (star.targetZ - star.startZ) * easedProgress;
+                    
+                    // Random tumbling rotation
+                    star.mesh.rotation.x += star.angularVelocity.x * deltaTime;
+                    star.mesh.rotation.y += star.angularVelocity.y * deltaTime;
+                    star.mesh.rotation.z += star.angularVelocity.z * deltaTime;
+                    
+                    // Color transition: cyan tile -> warm white star
+                    const r = 0.53 + 0.47 * easedProgress;  // 0x88 -> 0xff
+                    const g = 0.8 + 0.2 * easedProgress;    // 0xcc -> 0xff  
+                    const b = 1.0;                          // 0xff stays
+                    star.mesh.material.color.setRGB(r, g, b);
+                    
+                    // Size: start at tile size, shrink to star size as it rises
+                    const scale = 1.0 - (easedProgress * 0.7);
+                    star.mesh.scale.setScalar(Math.max(0.3, scale));
+                    
+                    // Fade in quickly at start, then maintain brightness
+                    const fadeInProgress = Math.min(1, riseProgress * 5); // Fade in over first 20%
+                    star.mesh.material.opacity = fadeInProgress * (0.9 + 0.1 * easedProgress);
+                    
+                    // Transition to star phase when done rising
+                    if (riseProgress >= 1) {
+                        star.phase = 'star';
+                    }
+                }
+                
+                // Twinkling star phase
+                if (star.phase === 'star') {
+                    // Gentle twinkling
+                    const twinkle = 0.7 + 0.3 * Math.sin(now * 0.003 + star.twinkleOffset);
+                    star.mesh.material.opacity = twinkle;
+                    star.mesh.scale.setScalar(0.3 + 0.1 * Math.sin(now * 0.002 + star.twinkleOffset));
+                    
+                    // Continue slow rotation
+                    star.mesh.rotation.y += 0.005;
+                }
             }
         }
         
         for (let debris of this.celebrationDebris) {
-            if (debris.phase === 'absorb' && Math.random() < 0.15) {
-                this.visualEffects.spawnSparkParticles(debris.mesh.position, new THREE.Color(0x44aaff));
-            }
-            if (debris.velocity && debris.velocity.length() > 5) {
-                this.visualEffects.spawnTrailParticle(
-                    debris.mesh.position.clone(),
-                    new THREE.Color(debris.originalColor || 0x4488ff),
-                    debris.velocity
-                );
+            // Skip sparkle effects for death sequence debris
+            if (!this.isDeathSequence) {
+                if (debris.phase === 'absorb' && Math.random() < 0.15) {
+                    this.visualEffects.spawnSparkParticles(debris.mesh.position, new THREE.Color(0x44aaff));
+                }
+                if (debris.velocity && debris.velocity.length() > 5) {
+                    this.visualEffects.spawnTrailParticle(
+                        debris.mesh.position.clone(),
+                        new THREE.Color(debris.originalColor || 0x4488ff),
+                        debris.velocity
+                    );
+                }
             }
         }
         
@@ -2080,6 +2615,108 @@ class Simulation {
                 debris.mesh.material.emissiveIntensity = 0.3;
                 
                 this.visualEffects.spawnSparkParticles(debris.mesh.position, new THREE.Color(0x88ccff));
+            }
+            
+            // Death sequence debris: blocks ascend to become stars
+            if (debris.phase === 'death_ascend') {
+                const now = Date.now();
+                
+                // Check if it's time to launch this block
+                if (!debris.launchTime) {
+                    const waitElapsed = now - debris.phaseStartTime;
+                    if (waitElapsed >= debris.launchDelay) {
+                        debris.launchTime = now;
+                        
+                        // Sparkle effect when block lifts off
+                        this.visualEffects.spawnSparkParticles(
+                            debris.mesh.position.clone(),
+                            new THREE.Color(0xaaddff)
+                        );
+                    } else {
+                        // Still waiting to launch - just rotate gently
+                        debris.mesh.rotation.x += debris.angularVelocity.x * deltaTime * 0.3;
+                        debris.mesh.rotation.y += debris.angularVelocity.y * deltaTime * 0.3;
+                        debris.mesh.rotation.z += debris.angularVelocity.z * deltaTime * 0.3;
+                        continue;
+                    }
+                }
+                
+                // Calculate rise progress
+                const riseElapsed = now - debris.launchTime;
+                const riseProgress = Math.min(1, riseElapsed / debris.riseDuration);
+                
+                // Ease-in curve: starts slow, then accelerates (quadratic)
+                const easedProgress = riseProgress * riseProgress;
+                
+                // Interpolate position from start to sky
+                debris.mesh.position.x = debris.startPosition.x + (debris.targetX - debris.startPosition.x) * easedProgress;
+                debris.mesh.position.y = debris.startPosition.y + (debris.targetY - debris.startPosition.y) * easedProgress;
+                debris.mesh.position.z = debris.startPosition.z + (debris.targetZ - debris.startPosition.z) * easedProgress;
+                
+                // Update velocity for trail effects
+                debris.velocity.set(
+                    (debris.targetX - debris.startPosition.x) * 0.01,
+                    (debris.targetY - debris.startPosition.y) * 0.01,
+                    (debris.targetZ - debris.startPosition.z) * 0.01
+                );
+                
+                // Gentle rotation as it rises
+                debris.mesh.rotation.x += debris.angularVelocity.x * deltaTime;
+                debris.mesh.rotation.y += debris.angularVelocity.y * deltaTime;
+                debris.mesh.rotation.z += debris.angularVelocity.z * deltaTime;
+                
+                // Color transition: original color -> glowing white/blue
+                const originalColor = new THREE.Color(debris.originalColor);
+                const starColor = new THREE.Color(0xaaccff);
+                debris.mesh.material.color.lerpColors(originalColor, starColor, easedProgress);
+                
+                // Add glow as it rises
+                if (debris.mesh.material.emissive) {
+                    debris.mesh.material.emissive.setHex(0x4488ff);
+                    debris.mesh.material.emissiveIntensity = easedProgress * 0.5;
+                }
+                
+                // Shrink slightly as it becomes a star
+                const scale = 1 - (easedProgress * 0.6);
+                debris.mesh.scale.setScalar(Math.max(0.3, scale));
+                
+                // Fade to semi-transparent
+                if (debris.mesh.material.transparent) {
+                    debris.mesh.material.opacity = 1 - (easedProgress * 0.3);
+                }
+                
+                // Spawn occasional trail particles
+                if (riseProgress > 0.1 && riseProgress < 0.9 && Math.random() < 0.1) {
+                    this.visualEffects.spawnGlowParticle(
+                        debris.mesh.position.clone(),
+                        new THREE.Color(0x88ccff)
+                    );
+                }
+                
+                // Transition to twinkling star when done rising
+                if (riseProgress >= 1) {
+                    debris.phase = 'death_star';
+                    debris.twinkleOffset = Math.random() * Math.PI * 2;
+                }
+                
+                continue;
+            }
+            
+            // Twinkling star phase for ascended blocks
+            if (debris.phase === 'death_star') {
+                const now = Date.now();
+                
+                // Gentle twinkling
+                const twinkle = 0.6 + 0.4 * Math.sin(now * 0.003 + debris.twinkleOffset);
+                if (debris.mesh.material.transparent) {
+                    debris.mesh.material.opacity = twinkle * 0.7;
+                }
+                debris.mesh.scale.setScalar(0.3 + 0.1 * Math.sin(now * 0.002 + debris.twinkleOffset));
+                
+                // Very slow rotation
+                debris.mesh.rotation.y += 0.001;
+                
+                continue;
             }
             
             if (debris.phase === 'explode') {
@@ -2181,7 +2818,8 @@ class Simulation {
             }
         }
         
-        if (timeRemaining < 0.3 && this.celebrationDebris.length > 0) {
+        if (timeRemaining < 0.3 && this.celebrationDebris.length > 0 && !this.isDeathSequence) {
+            // Celebration finale: absorb remaining debris with effects
             this.visualEffects.spawnFireworkBurst(championCenter, new THREE.Color(0x64ffda), 150);
             this.visualEffects.spawnConfettiBurst(championCenter, 80);
             this.visualEffects.spawnStarBurst(championCenter, 50);
@@ -2245,11 +2883,17 @@ class Simulation {
         this.visualEffects.updateAbsorptionFlashes(deltaTime);
         
         if (elapsed >= celebrationDuration) {
-            this.visualEffects.spawnFireworkBurst(championCenter.clone().add(new THREE.Vector3(0, 5, 0)), new THREE.Color(0xffd700), 200);
-            this.visualEffects.spawnConfettiBurst(championCenter, 150);
-            this.visualEffects.spawnStarBurst(championCenter, 60);
-            for (let i = 0; i < 5; i++) {
-                this.visualEffects.spawnEnergyRing(championCenter, new THREE.Color(0x64ffda));
+            // Only play finale celebration effects if this is NOT a death sequence
+            if (!this.isDeathSequence) {
+                this.visualEffects.spawnFireworkBurst(championCenter.clone().add(new THREE.Vector3(0, 5, 0)), new THREE.Color(0xffd700), 200);
+                this.visualEffects.spawnConfettiBurst(championCenter, 150);
+                this.visualEffects.spawnStarBurst(championCenter, 60);
+                for (let i = 0; i < 5; i++) {
+                    this.visualEffects.spawnEnergyRing(championCenter, new THREE.Color(0x64ffda));
+                }
+            } else {
+                // Death sequence finale - just a puff of dark dust
+                this.visualEffects.spawnDustParticles(championCenter, 2.0);
             }
             
             this.endCelebration();
@@ -2258,6 +2902,8 @@ class Simulation {
     
     endCelebration() {
         this.isCelebrating = false;
+        this.isDeathSequence = false; // Reset death sequence flag
+        this.deathSequenceFocusPoint = null; // Clear stored focus point
         
         for (let debris of this.celebrationDebris) {
             this.scene.remove(debris.mesh);
@@ -2265,6 +2911,26 @@ class Simulation {
             debris.mesh.material.dispose();
         }
         this.celebrationDebris = [];
+        
+        // Clean up rising stars from death sequence
+        if (this.risingStars && this.risingStars.length > 0) {
+            for (let star of this.risingStars) {
+                this.scene.remove(star.mesh);
+                star.mesh.material.dispose();
+                // Note: geometry is shared, disposed below
+            }
+            this.risingStars = [];
+        }
+        // Dispose shared star geometry
+        if (this.starGeometry) {
+            this.starGeometry.dispose();
+            this.starGeometry = null;
+        }
+        
+        // Restore tile instance mesh visibility (hidden during death sequence)
+        if (this.tileInstanceMesh) {
+            this.tileInstanceMesh.visible = true;
+        }
         
         if (this.spotlight) {
             this.scene.remove(this.spotlight);
@@ -2469,6 +3135,16 @@ class Simulation {
         if (creature.influenceProviders && creature.influenceProviders.length > 0) {
             const context = this.buildInfluenceContext();
             creature.influences = updateCreatureInfluences(creature, context);
+            
+            // Update sensor block glow - throttled for performance
+            // Each creature tracks its own last update time
+            // The smoothing in updateSensorGlow makes infrequent updates look continuous
+            const now = performance.now();
+            const lastUpdate = creature.lastSensorGlowUpdate || 0;
+            if (now - lastUpdate > 50) {  // Update roughly 20 times per second
+                creature.lastSensorGlowUpdate = now;
+                this.updateSensorGlow(creature);
+            }
         }
         
         const collisions = this.detectBlockCollisions(creature);
@@ -2639,6 +3315,76 @@ class Simulation {
             }
             
             const smoothTime = 0.3;
+            
+            // === DEATH SEQUENCE CAMERA ===
+            // Stay at leader position for first half, then tilt up to watch stars rise
+            if (this.isDeathSequence) {
+                const elapsed = Date.now() - this.celebrationStartTime;
+                const totalDuration = 5000; // Match celebrationDuration
+                const tiltStartTime = totalDuration * 0.5; // Start tilting at halfway point
+                const tiltDuration = totalDuration * 0.5;  // Tilt over second half
+                
+                // Use stored focus point (creature position is destroyed during death sequence)
+                const focusPoint = this.deathSequenceFocusPoint || targetLookAt;
+                
+                // Camera stays positioned relative to where the leader was
+                // Slightly behind and to the side for a nice angle
+                const cameraAngle = -0.3; // Fixed angle, no rotation
+                const cameraDistance = 20;
+                const baseHeight = 8;
+                
+                // Calculate tilt progress - only starts after halfway point
+                let tiltProgress = 0;
+                if (elapsed > tiltStartTime) {
+                    // How far into the tilt phase we are (0 to 1)
+                    const tiltElapsed = elapsed - tiltStartTime;
+                    const rawProgress = Math.min(1, tiltElapsed / tiltDuration);
+                    
+                    // Ease-in-out curve for smooth start and end to the tilt
+                    // Using smoothstep: 3x^2 - 2x^3
+                    tiltProgress = rawProgress * rawProgress * (3 - 2 * rawProgress);
+                }
+                
+                // Target look-at point: stays at creature level, then rises to sky
+                const groundY = focusPoint.y;
+                const skyY = 30; // How high to look at peak (matching tile heights of 25-40)
+                const currentLookY = groundY + (skyY - groundY) * tiltProgress;
+                
+                // Camera position: fixed relative to leader's ground position
+                // Camera rises slightly during tilt phase
+                targetPosition.set(
+                    focusPoint.x + Math.cos(cameraAngle) * cameraDistance,
+                    baseHeight + tiltProgress * 8, // Camera rises during tilt (less than before)
+                    focusPoint.z + Math.sin(cameraAngle) * cameraDistance
+                );
+                
+                // Look-at point: stays at creature, then rises to follow stars
+                const deathLookAt = new THREE.Vector3(
+                    focusPoint.x,
+                    currentLookY,
+                    focusPoint.z
+                );
+                
+                // Smooth camera movement
+                const lookX = this.smoothDamp(this.cameraLookAt.x, deathLookAt.x, this.lookAtVelocity.x, smoothTime, deltaTime);
+                const lookY = this.smoothDamp(this.cameraLookAt.y, deathLookAt.y, this.lookAtVelocity.y, smoothTime * 1.5, deltaTime); // Slightly slower Y for smooth tilt
+                const lookZ = this.smoothDamp(this.cameraLookAt.z, deathLookAt.z, this.lookAtVelocity.z, smoothTime, deltaTime);
+                
+                this.cameraLookAt.set(lookX.value, lookY.value, lookZ.value);
+                this.lookAtVelocity.set(lookX.velocity, lookY.velocity, lookZ.velocity);
+                
+                const posX = this.smoothDamp(this.cameraPosition.x, targetPosition.x, this.cameraVelocity.x, smoothTime, deltaTime);
+                const posY = this.smoothDamp(this.cameraPosition.y, targetPosition.y, this.cameraVelocity.y, smoothTime, deltaTime);
+                const posZ = this.smoothDamp(this.cameraPosition.z, targetPosition.z, this.cameraVelocity.z, smoothTime, deltaTime);
+                
+                this.cameraPosition.set(posX.value, posY.value, posZ.value);
+                this.cameraVelocity.set(posX.velocity, posY.velocity, posZ.velocity);
+                
+                this.camera.position.copy(this.cameraPosition);
+                this.camera.lookAt(this.cameraLookAt);
+                
+                return;
+            }
             
             // If in overview mode, use top-down celebration view
             if (this.overviewMode) {

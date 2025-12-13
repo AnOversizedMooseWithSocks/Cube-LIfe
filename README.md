@@ -180,7 +180,7 @@ Creatures can evolve special sensor blocks that detect environmental conditions 
 
 ### Sensor Types
 
-The simulator includes six sensor types, each detecting different environmental information:
+The simulator includes eight sensor types, each detecting different environmental information:
 
 | Sensor | Color | Description |
 |--------|-------|-------------|
@@ -190,6 +190,8 @@ The simulator includes six sensor types, each detecting different environmental 
 | **Gnd** (Ground) | Brown | Detects ground contact. Returns +1 when touching ground, -1 when airborne. |
 | **Rhy** (Rhythm) | Purple | Oscillator that provides a rhythmic signal for coordinated movement patterns. |
 | **Tilt** | Cyan | Detects left/right lean. Returns +1 when tilting right, -1 when tilting left. |
+| **Cmp** (Compass) | Pink | Detects which direction the creature is facing along the X-axis. Returns +1 when facing positive X, -1 when facing negative X. |
+| **Trk** (Tracking) | Yellow | Detects position relative to starting location. Returns values based on displacement from origin. |
 
 ### Sensor Modes
 
@@ -214,8 +216,24 @@ When a sensor block is added to a creature:
 - **Velocity** sensors help creatures modulate effort based on their current speed
 - **Rhythm** sensors create coordinated, rhythmic gaits
 - **Tilt** sensors help creatures maintain balance
+- **Compass** sensors enable directional awareness and heading control
+- **Tracking** sensors allow creatures to develop homing or range-limiting behaviors
 
 Sensors are displayed in the creature info panels when present, showing which sensor types a creature has evolved.
+
+### Sensor Visual Feedback
+
+Active sensor blocks display a real-time glow effect that pulses based on their current output value. This "thinking" visualization lets you watch creatures respond to their environment. The glow color matches the sensor's type color and intensity reflects the strength of the signal being sent to connected joints.
+
+### Advanced Sensor Behavior
+
+Sensors can influence joint movement in multiple ways beyond simple speed modulation:
+
+- **Speed modulation** - Adjusts how fast a joint rotates
+- **Direction modulation** - Can reverse or modify rotation direction
+- **Action generation** - Influences overall movement pattern selection
+
+Additionally, sensors attached to odd-numbered block faces have their influence values negated compared to even faces, creating behavioral variety from the same sensor types.
 
 ---
 
@@ -263,20 +281,32 @@ Randomly selects a different fitness mode each generation, preventing creatures 
 The bottom center of the screen provides camera controls:
 
 ### Follow
-Automatically follows the current best-performing creature. The camera smoothly tracks their movement.
+Automatically follows the current best-performing creature. The camera smoothly tracks their movement with an ease-in transition. Auto-zoom adjusts to keep the creature visible, but only activates when first entering Follow mode - switching targets preserves your zoom level.
 
 ### Overview
-Switches to a top-down view of the entire arena, perfect for watching all creatures at once.
+Switches to a top-down view of the entire arena. Can be combined with Follow mode for a top-down view that tracks the leader.
+
+### Camera Mode Combinations
+
+Follow and Overview work independently, creating four viewing options:
+
+- **Free Camera** - Both off. Full manual control.
+- **3D Follow** - Follow on, Overview off. Track the leader from behind.
+- **Top-Down Overview** - Follow off, Overview on. See the whole arena from above.
+- **Top-Down Follow** - Both on. Top-down view that tracks the leader.
 
 ### Reset
-Returns the camera to its default position.
+Returns the camera to its default position and clears any manual zoom overrides.
 
 ### Manual Camera
 When not in Follow or Overview mode:
+
 - **Drag** - Rotate the camera around the focus point
-- **Right-drag** - Pan the camera
-- **Scroll** - Zoom in/out
+- **Right-drag** - Pan along the ground plane relative to camera facing
+- **Scroll** - Zoom in/out (your zoom level is preserved when switching targets)
 - **Click** - Select a specific creature
+
+The camera cannot go below ground level in any mode.
 
 ---
 
@@ -297,7 +327,7 @@ When a generation fails to beat the target fitness, it's marked as a "dead end."
 
 ## Evolution Tree
 
-Click the **Tree** button to open the Evolution Tree viewer - a visual representation of your entire evolutionary history.
+Click the **Tree** button to open the Evolution Tree viewer - a visual representation of your entire evolutionary history. The simulation automatically pauses while viewing the tree.
 
 ![Evolution Tree](/media/evolutionTree.png)
 
@@ -316,25 +346,26 @@ Click any node to view comprehensive creature information:
 
 ![Creature Footprint](/media/creatureFootprint.png)
 
-*Selecting a node reveals detailed metrics, sensor configuration, and a visual footprint showing the creature's movement pattern.*
+*Selecting a node reveals detailed metrics, sensor configuration, and an animated footprint showing how the creature's path unfolded.*
 
 The detail panel shows:
 
 - **Status and Rank** - The creature's role in evolution and ranking within its generation
 - **Species and Seed** - Genetic lineage identifier and the DNA seed for deterministic recreation
+- **Fitness Mode** - Which fitness mode was used to judge this creature (shown in tooltip)
 - **Sensors** - Which sensor types the creature has evolved, with newly added sensors highlighted
 - **Raw Metrics** - Distance traveled, max height, jump height, and tiles covered
 - **Efficiency** - Distance per tile ratio showing movement efficiency
 - **Mode Scores** - How the creature would score under each fitness mode
-- **Footprint** - A visual map showing the ground tiles the creature covered during its run
+- **Animated Footprint** - A 3-second animation showing tiles appearing in the order they were visited
 
-The footprint visualization helps you understand a creature's movement strategy at a glance - whether it moves in straight lines, circles, or explores widely.
+The footprint visualization helps you understand a creature's movement strategy at a glance - watch the path unfold to see whether it moves in straight lines, circles, or explores widely.
 
 ### Tree Controls
 
 - **Reset View** - Return to default zoom and position
 - **Fit to View** - Automatically frame all nodes
-- **Champions Only / Species View** - Toggle between viewing modes
+- **Champions Only / Species View** - Toggle between viewing only champion nodes or seeing the best creature per species per generation
 - **Click** - Select a node to see details and enable special modes
 - **Scroll** - Zoom in/out
 - **Drag** - Pan around the tree
@@ -356,11 +387,13 @@ From the Evolution Tree, you can access three special viewing modes:
 
 ### Lineage Playback
 
-Watch a creature's entire evolutionary history unfold, from the very first ancestor to the selected creature. Each "day" shows one generation, with the sun moving across the sky to mark the passage of time.
+Watch a creature's entire evolutionary history unfold, from the very first ancestor to the selected creature. Each "day" shows one generation, with the sun rising and setting to mark the passage of time.
 
-
+**Day Length Control:**
+Adjust how long each evolutionary day lasts using the duration slider (5-300 seconds, default 60). Shorter days give a quick overview; longer days let you study each generation's movement.
 
 **Controls:**
+- **Day Length** - Slider to adjust seconds per generation
 - **Previous** - Previous generation
 - **Pause/Play** - Pause/Resume playback
 - **Next** - Next generation
@@ -429,13 +462,18 @@ The simulator includes several visual systems that enhance the experience and pr
 
 The simulation features a full day/night cycle with:
 
-- **Moving Sun** - The sun arcs across the sky during each round, from sunrise to sunset
+- **Moving Sun** - The sun arcs across the sky during each round, rising in the east and setting in the west
 - **Dynamic Lighting** - Shadows and ambient light change realistically throughout the day
+- **Moonlight** - A blue ambient light illuminates the scene at night, turning off when the sun rises
 - **Procedural Stars** - A beautiful night sky with thousands of procedurally generated stars in varying colors (white, blue, yellow) and brightness levels
+- **Dual Star Layers** - Two star spheres at different distances move at different speeds for parallax depth
 - **Nebula Regions** - Subtle cosmic cloud formations add depth to the night sky
-- **Parallax Effect** - Two star layers move at different speeds for added depth
 
 The sky system works with the Light sensor, allowing creatures to evolve sun-tracking behaviors.
+
+### Circular Arena
+
+The ground plane is a circle (radius approximately 425 units) that matches the boundary of the inner star sphere, creating a natural arena edge.
 
 ### Ground Trail System
 
@@ -444,7 +482,8 @@ As creatures move across the arena, they light up ground tiles that track their 
 - **Cyan Glow** - Tiles light up as creatures pass over them
 - **Persistent Trails** - Trails remain visible throughout the round
 - **Fitness Tracking** - The number of tiles lit contributes to Area and Spartan fitness scores
-- **Footprint Visualization** - The Evolution Tree shows a miniature version of each creature's ground coverage
+- **Footprint Visualization** - The Evolution Tree shows an animated replay of each creature's ground coverage
+- **High Capacity** - Up to 300,000 tile instances supported per round
 
 ### Particle Effects
 
@@ -453,7 +492,16 @@ The simulator uses various particle effects to enhance visual feedback:
 - **Dust Particles** - Kicked up when creatures land or move vigorously
 - **Spark Effects** - Flash when blocks collide or during celebrations
 - **Celebration Effects** - Confetti, fireworks, and energy rings when a new champion is crowned
-- **Sensor Glow** - Special sensor blocks emit a subtle glow matching their type color
+- **Sensor Glow** - Active sensor blocks pulse and glow based on their output value, letting you watch creatures "think"
+
+### Death Memorial Sequence
+
+When evolution hits a dead end (no creature beats the target), a memorial sequence plays instead of a celebration:
+
+- The fallen creature's blocks rise into the sky with gentle rotation
+- Light tiles rise in the order they were visited, tracing the creature's path one last time
+- Both become twinkling stars in the night sky
+- The camera follows the ascending memorial before returning to normal
 
 ---
 
@@ -504,7 +552,81 @@ Each round simulates a full day, from sunrise to sunset. The sun moves across th
 
 ### Latest Updates
 
+#### New Features
+
+- **Compass Sensor** - New sensor type (pink/magenta) that detects which direction a creature is facing along the X-axis. Useful for creatures that need directional awareness.
+
+- **Tracking Sensor** - New sensor type (yellow) that detects position relative to the creature's starting location. Enables creatures to develop homing behaviors or range awareness.
+
+- **Enhanced Sensor Influence System** - Sensors now affect multiple aspects of movement beyond just speed: rotation speed, rotation direction, and action generation. Each sensor type declares which modulation methods it supports. For example, gravity sensors affect both speed and direction for balance behaviors.
+
+- **Face-Based Influence Flipping** - Sensors attached to odd-numbered block faces have their influence values negated compared to even faces. This creates behavioral variety where the same sensor type produces different responses based on attachment position.
+
+- **Sensor Activity Glow** - Sensor blocks now display a real-time glow effect showing their current output value. Watch creatures "think" as sensors pulse and glow in response to environmental conditions. Uses smooth interpolation and time-based throttling for performance.
+
+- **Death Memorial Sequence** - When evolution hits a dead end, instead of a celebration, a somber memorial plays. The fallen creature's blocks and the light tiles it visited rise into the sky to become twinkling stars. Tiles rise in the order they were visited (tracing the creature's path in life), with gentle rotation during ascent.
+
+- **Independent Camera Modes** - Overview and Follow modes now work independently, creating four possible combinations: free camera, 3D follow only, top-down overview only, and top-down overview with creature following.
+
+- **Smart Auto-Zoom** - Camera auto-zoom now only activates when Follow mode is first enabled. Switching between followed creatures preserves your manual zoom level. Scroll wheel adjustments are respected until you change modes.
+
+- **Ground Plane Panning** - In 3D mode, camera panning now moves along the ground plane (X-Z) based on your view direction. Horizontal drag moves left/right relative to camera facing, vertical drag moves forward/back.
+
+- **Circular Arena** - The ground plane is now circular (radius ~425 units) instead of infinite, matching the boundary of the star sphere.
+
+- **Moonlight** - A blue ambient light now illuminates the scene during nighttime hours, toggling on when the sun sets and off when it rises.
+
+- **Adjustable Lineage Day Length** - In Lineage Playback mode, you can now set how long each evolutionary "day" lasts (5-300 seconds, default 60). The sun properly rises and sets with each generation.
+
+- **Animated Footprint Playback** - When viewing a creature's footprint in the Evolution Tree, tiles now animate in the order they were visited over 3 seconds, showing how the creature's path unfolded.
+
+- **DNA-Based Creature Naming** - Creatures are now identified by their last DNA segment (a 19-character hexadecimal string representing the most recently added block). This eliminates duplicate naming issues after backtracking.
+
+- **Behavioral Fingerprinting** - The uniqueness system now excludes cosmetic properties (like color) when determining if two creatures are identical. Only behavioral properties affect uniqueness.
+
+#### Improvements
+
+- **Variation Field Effect** - The DNA variation field now has direct influence on joint movement pattern generation, not just contributing to a hash. This provides more nuanced genetic variation.
+
+- **Creature Info Display** - The creature information panel now shows actual DNA segment values (side attachment and variation) parsed from the DNA string.
+
+- **Compact Sensor UI** - Sensor controls changed from 3 columns to 2 columns for better spacing and readability.
+
+- **Streamlined Tree Views** - Evolution Tree now offers only "Champions Only" and "Species View" modes, removing the less useful "Full" and "Lineage" views.
+
+- **Tree Pause Behavior** - Opening the Evolution Tree now automatically pauses the simulation, restoring the previous pause state when closed.
+
+- **Tooltips Show Fitness Mode** - Evolution Tree tooltips now display which fitness mode was used to judge each creature.
+
+- **Light Tile Capacity** - Tile instance limit increased from 100,000 to 300,000 to accommodate complex creature paths. Console warning appears when limit is reached.
+
+- **Ground Clearance** - Creatures with blocks extending below their origin point are now spawned with automatic ground clearance to prevent intersection.
+
+- **Camera Floor Limit** - Camera is prevented from going below ground level in any mode.
+
+- **Sensor Glow Intensity** - Sensor block glow effect capped at 1.0 intensity (was 1.5) for less visually distracting feedback.
+
+- **Realistic Sun Path** - Sun now rises in the east and sets in the west, rotating in the same direction as the star spheres with timing aligned to the day/night lighting cycle.
+
 #### Bug Fixes
+
+- **Outcast Mode Leader** - Fixed issue where Outcast fitness mode would incorrectly identify the leader in sudden death, often showing the next creature to be eliminated rather than the actual best performer.
+
+- **Sensor Start Mode** - Fixed bug where creatures set to start with specific sensors would receive different sensor types. The code was checking a non-existent property instead of using the proper method.
+
+- **Determinism Fix** - Removed non-deterministic code paths including the reinforceMovements() function that modified creature actions without updating DNA, causing changes to be lost on save/load.
+
+- **Dead Code Removal** - Cleaned up unused code including JointAction.mutate() and old color/material generation methods that were replaced by the DNA system.
+
+- **Block Count Validation** - Fixed validation errors where block counts weren't accounting for sensor blocks added at creature generation.
+
+- **Sensor Z-Fighting** - Fixed visual artifacts where sensor block indicators would flicker or disappear at certain angles by repositioning them further from block surfaces and adding polygon offset.
+
+- **Character Encoding** - Fixed numerous encoding issues throughout the codebase where special characters had become garbled.
+
+#### Previous Updates
+
+##### Bug Fixes
 
 - **Fitness Formula Consistency** - Fixed inconsistency between how creature fitness was calculated in different parts of the code. All fitness formulas now match exactly across creature evaluation, evolution selection, and UI display, ensuring creatures are ranked correctly.
 
@@ -514,13 +636,13 @@ Each round simulates a full day, from sunrise to sunset. The sun moves across th
 
 - **Night Sky Fallback** - Added a beautiful procedural star texture generator as fallback when the stars.jpg texture file is unavailable. The procedural texture includes thousands of varied stars with realistic colors (white, blue, yellow) and subtle nebula regions.
 
-#### Improvements
+##### Improvements
 
 - **Null Safety** - Added defensive checks for undefined values in fitness calculations to prevent potential errors during edge cases.
 
 - **Code Documentation** - Added comments marking critical formulas that must stay synchronized across files to prevent future inconsistencies.
 
-#### Documentation
+##### Documentation
 
 - **DNA System** - Added comprehensive documentation explaining the deterministic DNA-based creature generation system that ensures reproducibility across saves, loads, and lineage playback.
 

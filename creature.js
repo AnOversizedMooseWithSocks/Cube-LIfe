@@ -40,7 +40,9 @@ const SPECIAL_TYPE_CODES = {
     'velocity': 3,
     'ground': 4,
     'rhythm': 5,
-    'tilt': 6
+    'tilt': 6,
+    'compass': 7,
+    'tracking': 8
 };
 
 /**
@@ -53,7 +55,9 @@ const SPECIAL_TYPE_NAMES = {
     3: 'velocity',
     4: 'ground',
     5: 'rhythm',
-    6: 'tilt'
+    6: 'tilt',
+    7: 'compass',
+    8: 'tracking'
 };
 
 /**
@@ -540,7 +544,107 @@ class Creature {
     }
     
     /**
+     * Get the last DNA segment (the most recently added block's descriptor)
+     * This provides a unique, consistent-length identifier for each evolutionary step.
+     * 
+     * Since only one block can attach per face, each block addition produces a 
+     * unique 19-character DNA segment. This makes an ideal creature "name" that:
+     *   - Is unique per evolutionary stage
+     *   - Has consistent length for clean UI display
+     *   - Directly represents what that evolution step added
+     * 
+     * @returns {string} The last block's DNA descriptor (19 chars), or creature seed if no blocks
+     */
+    getLastDNASegment() {
+        if (!this.dna) {
+            this.buildDNA();
+        }
+        
+        const parts = this.dna.split('-');
+        // Last part is the most recently added block
+        // If only seed exists (parts.length === 1), return the seed
+        return parts[parts.length - 1];
+    }
+    
+    /**
+     * Get a structural fingerprint for species identification.
+     * Two creatures are the same "species" if they have identical body structure
+     * (same blocks connected in the same way), regardless of movement variation.
+     * 
+     * The fingerprint includes: creatureSeed + block connections (ID, parent, side)
+     * but EXCLUDES: variation (V), color (C), material (M) since those don't affect structure.
+     * 
+     * @returns {string} Structural fingerprint for species comparison
+     */
+    getStructuralFingerprint() {
+        if (!this.dna) {
+            this.buildDNA();
+        }
+        
+        const parts = this.dna.split('-');
+        const fingerprint = [parts[0]]; // Start with creature seed
+        
+        // For each block, extract only structural info: blockID, parentID, side
+        for (let i = 1; i < parts.length; i++) {
+            const parsed = parseBlockDescriptor(parts[i]);
+            if (parsed) {
+                // Format: "BBpPPsS" where BB=blockId, PP=parentId, S=side
+                // This uniquely identifies the structural connection
+                fingerprint.push(`${toHex(parsed.blockId, 2)}p${toHex(parsed.parentId, 2)}s${parsed.side}`);
+            }
+        }
+        
+        return fingerprint.join('-');
+    }
+    
+    /**
+     * Get a behavioral fingerprint for the last added block.
+     * This is used for uniqueness tracking during evolution - two creatures with
+     * the same behavioral fingerprint would behave identically and should not
+     * both be evaluated.
+     * 
+     * Includes everything that affects behavior:
+     *   - blockID: which block this is
+     *   - parentID: which block it attaches to  
+     *   - side: which face of parent (affects joint axis)
+     *   - variation: movement pattern seed
+     *   - material: affects physics properties
+     *   - special: sensor type (affects environmental response)
+     * 
+     * EXCLUDES color (C) since it's purely cosmetic and doesn't affect behavior.
+     * 
+     * @returns {string} Behavioral fingerprint for uniqueness checking
+     */
+    getBehavioralFingerprint() {
+        if (!this.dna) {
+            this.buildDNA();
+        }
+        
+        const parts = this.dna.split('-');
+        if (parts.length < 2) {
+            // Just seed, no blocks - return seed as fingerprint
+            return parts[0];
+        }
+        
+        // Parse the last block's descriptor and rebuild without color
+        const lastSegment = parts[parts.length - 1];
+        const parsed = parseBlockDescriptor(lastSegment);
+        
+        if (parsed) {
+            // Rebuild descriptor without color: BBbPPsVVmMMxXX
+            // Format: {blockId}b{parentId}s{side}v{variation}m{material}x{special}
+            return `${toHex(parsed.blockId, 2)}b${toHex(parsed.parentId, 2)}s${parsed.side}v${toHex(parsed.variation, 2)}m${toHex(parsed.materialSeed, 2)}x${toHex(parsed.specialCode, 2)}`;
+        }
+        
+        // Fallback: return full segment
+        return lastSegment;
+    }
+    
+    /**
      * Generate movement actions for a joint based on DNA
+     * Uses the DNA substring plus the block's variation field for the seed.
+     * This ensures the variation field has a direct effect on movement patterns.
+     * 
      * @param {number} blockIndex - The block index (joint connects parent to this block)
      * @returns {JointAction[]} Array of actions for this joint
      */
@@ -555,7 +659,16 @@ class Creature {
         
         // Get DNA substring up to and including this block
         const dnaForBlock = getDNAForBlock(this.dna, blockIndex);
-        const seed = dnaToSeed(dnaForBlock);
+        let seed = dnaToSeed(dnaForBlock);
+        
+        // Mix in the block's variation field directly for explicit movement control
+        // This ensures variation specifically influences this joint's movement
+        const block = this.blocks[blockIndex];
+        if (block && block.variation !== undefined) {
+            // XOR with a large prime multiplied by variation to mix distinctly
+            seed = ((seed ^ (block.variation * 16777259)) >>> 0);
+        }
+        
         const rng = new SeededRandom(seed);
         
         return this.generateRandomActions(rng);
@@ -592,9 +705,12 @@ class Creature {
      * Generate influence responses for a joint based on DNA
      * This determines how the joint reacts to sensor inputs
      * 
+     * Response format: {channelName: {speed: weight, direction: weight}}
+     * Each sensor type defines which modulation methods it supports.
+     * 
      * @param {number} blockIndex - The block index for this joint
      * @param {string[]} availableChannels - Sensor channels available on this creature
-     * @returns {Object} influenceResponses object {channelName: weight}
+     * @returns {Object} influenceResponses object
      */
     generateInfluenceResponsesFromDNA(blockIndex, availableChannels) {
         if (!this.dna || availableChannels.length === 0) {
@@ -604,7 +720,14 @@ class Creature {
         // Get DNA for this block and create a seed
         const dnaForBlock = getDNAForBlock(this.dna, blockIndex);
         // Use a different seed offset for influence responses vs actions
-        const seed = dnaToSeed(dnaForBlock + 'influence');
+        let seed = dnaToSeed(dnaForBlock + 'influence');
+        
+        // Mix in the block's variation field for explicit control
+        const block = this.blocks[blockIndex];
+        if (block && block.variation !== undefined) {
+            seed = ((seed ^ (block.variation * 16777259)) >>> 0);
+        }
+        
         const rng = new SeededRandom(seed);
         
         const responses = {};
@@ -613,11 +736,30 @@ class Creature {
         for (const channel of availableChannels) {
             // 40% chance to respond to any given channel
             if (rng.random() < 0.4) {
-                // Generate weight from -1 to +1, biased toward stronger responses
-                const weight = rng.randomFloat(-1, 1);
-                // Only include if weight is significant (> 0.1 magnitude)
-                if (Math.abs(weight) > 0.1) {
-                    responses[channel] = weight;
+                // Get the sensor type's supported modulation methods
+                const sensorType = INFLUENCE_TYPES[channel];
+                const methods = sensorType?.modulationMethods || ['speed'];
+                
+                const channelResponse = {};
+                let hasSignificantResponse = false;
+                
+                // Generate a weight for each supported method
+                for (const method of methods) {
+                    // 60% chance to use each method the sensor supports
+                    if (rng.random() < 0.6) {
+                        // Generate weight from -1 to +1
+                        const weight = rng.randomFloat(-1, 1);
+                        // Only include if weight is significant (> 0.15 magnitude)
+                        if (Math.abs(weight) > 0.15) {
+                            channelResponse[method] = weight;
+                            hasSignificantResponse = true;
+                        }
+                    }
+                }
+                
+                // Only add the channel if it has at least one significant response
+                if (hasSignificantResponse) {
+                    responses[channel] = channelResponse;
                 }
             }
         }

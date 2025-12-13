@@ -48,6 +48,11 @@ class EvolutionManager {
         // Each entry: { generation, rankedPopulation, triedIndices, championFitness }
         this.generationHistory = [];
         
+        // Track DNA segments that have been tried across all generations
+        // Key: DNA segment (last block descriptor), Value: generation it was tried in
+        // This prevents re-exploring identical evolutionary paths
+        this.triedDNASegments = new Map();
+        
         // Full evolution tree - tracks ALL evolutionary attempts including dead ends
         // Each node: { id, name, generation, fitness, blocks, distance, height, parentId, status, children }
         // status: 'champion' | 'dead_end' | 'defending' | 'backtrack_source'
@@ -163,6 +168,70 @@ class EvolutionManager {
         return descriptions[this.fitnessMode] || descriptions['distance'];
     }
     
+    // ========================================================================
+    // DNA UNIQUENESS TRACKING
+    // ========================================================================
+    // Ensures we never re-explore identical evolutionary paths.
+    // Each creature's DNA segment (last block descriptor) uniquely identifies
+    // its structure. By tracking tried segments, we avoid:
+    //   - Duplicate creatures in the same generation
+    //   - Re-exploring previously failed genetic lines during backtracking
+    //   - Wasting computation on evolutionary feedback loops
+    
+    /**
+     * Check if a DNA segment has already been tried
+     * @param {string} dnaSegment - The last DNA segment (block descriptor) to check
+     * @returns {boolean} True if this segment was already tried
+     */
+    isDNASegmentTried(dnaSegment) {
+        return this.triedDNASegments.has(dnaSegment);
+    }
+    
+    /**
+     * Register a DNA segment as tried
+     * @param {string} dnaSegment - The DNA segment to register
+     * @param {number} generation - The generation it was tried in
+     */
+    registerDNASegment(dnaSegment, generation) {
+        if (!this.triedDNASegments.has(dnaSegment)) {
+            this.triedDNASegments.set(dnaSegment, generation);
+        }
+    }
+    
+    /**
+     * Check if a creature's behavioral configuration has been tried, and register it if not.
+     * Uses behavioral fingerprint which includes everything that affects behavior:
+     * blockID, parentID, side, variation, material, special (sensor type)
+     * but EXCLUDES color since it's purely cosmetic.
+     * 
+     * @param {Creature} creature - The creature to check
+     * @returns {boolean} True if this is a NEW (untried) creature, false if duplicate
+     */
+    tryRegisterCreature(creature) {
+        // Use behavioral fingerprint - excludes color, includes everything else
+        const fingerprint = creature.getBehavioralFingerprint();
+        if (this.isDNASegmentTried(fingerprint)) {
+            return false; // Already tried this configuration
+        }
+        this.registerDNASegment(fingerprint, this.generation);
+        return true; // New configuration, successfully registered
+    }
+    
+    /**
+     * Get statistics about DNA tracking
+     * @returns {Object} Stats about tried behavioral fingerprints
+     */
+    getDNATrackingStats() {
+        const byGeneration = {};
+        for (const [segment, gen] of this.triedDNASegments) {
+            byGeneration[gen] = (byGeneration[gen] || 0) + 1;
+        }
+        return {
+            totalTried: this.triedDNASegments.size,
+            byGeneration: byGeneration
+        };
+    }
+    
     /**
      * Get description of the currently active mode (for random mode display)
      */
@@ -227,6 +296,46 @@ class EvolutionManager {
     }
     
     /**
+     * Predict whether the best creature will make progress (beat the target fitness).
+     * This is used to determine whether to show celebration or death animation.
+     * 
+     * @param {Creature} bestCreature - The best creature from this generation
+     * @param {string} evaluationMode - The fitness mode being used for evaluation
+     * @returns {Object} { willProgress: boolean, isFirstGeneration: boolean, isOutcastMode: boolean }
+     */
+    willMakeProgress(bestCreature, evaluationMode) {
+        // Generation 1 always makes progress (establishing first champion)
+        if (this.generation === 1) {
+            return { willProgress: true, isFirstGeneration: true, isOutcastMode: false };
+        }
+        
+        // Outcast mode always makes progress (no target to beat - strangest creature wins)
+        if (evaluationMode === 'outcast') {
+            return { willProgress: true, isFirstGeneration: false, isOutcastMode: true };
+        }
+        
+        // Calculate the effective target fitness using current mode
+        const effectiveTargetFitness = this.calculateFitnessFromMetrics(
+            this.targetDistance,
+            this.targetHeight,
+            this.targetTilesLit,
+            this.targetJumpHeight,
+            evaluationMode
+        );
+        
+        // Check if best creature beats the target
+        const willProgress = bestCreature.fitness > effectiveTargetFitness;
+        
+        return { 
+            willProgress: willProgress, 
+            isFirstGeneration: false, 
+            isOutcastMode: false,
+            bestFitness: bestCreature.fitness,
+            targetFitness: effectiveTargetFitness
+        };
+    }
+    
+    /**
      * Start a new evolution with generation 1 having 2 blocks
      * Each creature in generation 1 will have a different 2-block configuration
      * with multiple movement pattern variants per configuration
@@ -251,6 +360,7 @@ class EvolutionManager {
         this.generationHistory = [];
         this.evolutionTree = []; // Reset evolution tree
         this.evolutionEvents = []; // Reset event log
+        this.triedDNASegments = new Map(); // Reset DNA tracking
         this.nextNodeId = 1;
         this.currentBranchId = null;
         this.deadEndCount = 0;
@@ -327,8 +437,9 @@ class EvolutionManager {
                 creature.configIndex = configIndex;
                 creature.variantIndex = variantIndex;
                 
-                // Assign creature name: G{generation}_C{config+1}_V{variant+1}
-                creature.name = `G${this.generation}_C${configIndex + 1}_V${variantIndex + 1}`;
+                // Use last DNA segment as creature name - unique per evolutionary step,
+                // consistent length, and directly represents this creature's latest block
+                creature.name = creature.getLastDNASegment();
                 creature.parentName = null; // Gen 1 has no parent
                 creature.isDefendingChampion = false; // Gen 1 has no defending champion
                 
@@ -338,7 +449,14 @@ class EvolutionManager {
                     console.error(`[VALIDATION ERROR] ${creature.name} has ${creature.blocks.length} blocks, expected ${expectedBlocks}`);
                 }
                 
-                this.population.push(creature);
+                // Check for DNA uniqueness - ensure we don't have duplicate creatures
+                if (this.tryRegisterCreature(creature)) {
+                    this.population.push(creature);
+                } else {
+                    // Extremely rare: regenerate with a different seed
+                    console.warn(`[DNA] Duplicate detected in Gen 1, regenerating...`);
+                    variantIndex--; // Retry this variant
+                }
             }
         }
         
@@ -524,7 +642,7 @@ class EvolutionManager {
             console.log(`   Champion: "${this.champion.name}" with ${this.champion.blocks.length} blocks`);
             console.log(`   Target fitness set to: ${this.targetFitness.toFixed(2)}`);
             console.log(`   Target metrics - Distance: ${this.targetDistance.toFixed(2)}m, Height: ${this.targetHeight.toFixed(2)}m, Tiles: ${this.targetTilesLit}, Jump: ${this.targetJumpHeight.toFixed(2)}m`);
-            console.log(`   This champion will become G${this.generation + 1}_C0_V0 in the next generation`);
+            console.log(`   This champion will be defending in Generation ${this.generation + 1}`);
             
             // Start next generation
             this.generation++;
@@ -614,7 +732,7 @@ class EvolutionManager {
             console.log(`   Champion was defending: ${actualBest.isDefendingChampion || false}`);
             console.log(`   New target fitness: ${this.targetFitness.toFixed(2)}`);
             console.log(`   Target metrics - Distance: ${this.targetDistance.toFixed(2)}m, Height: ${this.targetHeight.toFixed(2)}m, Tiles: ${this.targetTilesLit}, Jump: ${this.targetJumpHeight.toFixed(2)}m`);
-            console.log(`   This champion will become G${this.generation + 1}_C0_V0 in the next generation`);
+            console.log(`   This champion will be defending in Generation ${this.generation + 1}`);
             
             // Update all-time champion
             if (!this.allTimeChampion || actualBestFitness > this.allTimeChampion.fitness) {
@@ -941,10 +1059,10 @@ class EvolutionManager {
                 // Store a clone for tournaments (only for champions and potential backtracks)
                 creatureClone: (status === 'champion' || status === 'competitor' || status === 'dead_end') 
                     ? creature.clone() : null,
-                // Species tracking - creatures with same structureSeed have identical body plans
-                // configIndex is 0-based index within a generation's configurations
-                // structureSeed is the random seed that generated the body shape
-                speciesId: creature.structureSeed || null,
+                // Species tracking - creatures with same structural fingerprint have identical body plans
+                // Use getStructuralFingerprint() which captures the block connections (not movement)
+                speciesId: creature.getStructuralFingerprint ? creature.getStructuralFingerprint() : 
+                           (creature.structureSeed || null),
                 configIndex: creature.configIndex !== undefined ? creature.configIndex : null,
                 variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null,
                 // Sensor/special block tracking
@@ -982,9 +1100,16 @@ class EvolutionManager {
     addTreeNode(creature, status) {
         const nodeId = this.nextNodeId++;
         
+        // Get species fingerprint - creatures with same structure are same species
+        // This is based on block connections, not movement variation
+        const speciesFingerprint = creature.getStructuralFingerprint ? 
+            creature.getStructuralFingerprint() : (creature.structureSeed || null);
+        
         const node = {
             id: nodeId,
-            name: creature.name || `G${this.generation}_Unknown`,
+            // Full DNA segment as the creature's name/identifier
+            // This is the last block descriptor, showing exactly what was added
+            name: creature.name || `Gen${this.generation}_Unknown`,
             generation: this.generation,
             fitness: creature.fitness,
             blocks: creature.blocks.length,
@@ -1003,8 +1128,10 @@ class EvolutionManager {
             // Store a clone of the creature so we can recreate it for tournaments
             // This ensures we can always access the champion regardless of generation history
             creatureClone: creature.clone(),
-            // Species tracking - creatures with same structureSeed have identical body plans
-            speciesId: creature.structureSeed || null,
+            // Species tracking - structural fingerprint groups creatures by body plan
+            // Two creatures are same species if they have identical block connections
+            // but may differ in movement variation (V values in DNA)
+            speciesId: speciesFingerprint,
             configIndex: creature.configIndex !== undefined ? creature.configIndex : null,
             variantIndex: creature.variantIndex !== undefined ? creature.variantIndex : null,
             // Sensor/special block tracking
@@ -1027,7 +1154,7 @@ class EvolutionManager {
             this.currentBranchId = nodeId;
         }
         
-        console.log(`[TREE] Added ${node.name} to tree as ${status} (node #${nodeId})`);
+        console.log(`[TREE] Added ${node.name} (Gen ${node.generation}) as ${status} (node #${nodeId})`);
         return nodeId;
     }
     
@@ -1697,7 +1824,8 @@ class EvolutionManager {
         this.population = [];
         
         // Get the parent name for all creatures in this generation
-        const parentName = championCreature.name || `G${this.generation - 1}_Champion`;
+        // (Champion should always have a DNA-based name, fallback is just safety)
+        const parentName = championCreature.name || `Gen${this.generation - 1}_Champion`;
         
         // Maximum blocks to add this generation (user configurable, 1-4)
         const maxBlocksToAdd = this.blocksPerGeneration || 1;
@@ -1737,12 +1865,13 @@ class EvolutionManager {
         championClone.configIndex = -1;  // Special index to identify as the unchanged champion
         championClone.variantIndex = 0;
         championClone.isDefendingChampion = true;  // Flag to identify in UI
-        championClone.name = `G${this.generation}_C0_V0`;  // Defending champion is config 0
+        // Defending champion keeps its DNA-based name (same as parent since no new blocks)
+        championClone.name = championClone.getLastDNASegment();
         championClone.parentName = parentName;
         this.population.push(championClone);
         
         console.log(`Including previous champion "${championCreature.name}" (${championCreature.blocks.length} blocks) as defending baseline`);
-        console.log(`   -> This creature becomes G${this.generation}_C0_V0 (the defending champion for this generation)`);
+        console.log(`   -> Defending champion: ${championClone.name}`);
         
         // Get all available attachment points from the champion
         let attachmentPoints = championCreature.getAvailableAttachmentPoints();
@@ -1902,15 +2031,22 @@ class EvolutionManager {
                     newCreature.seed = championCreature.seed + '_gen' + this.generation + '_p' + pointIndex + '_v' + variantIndex;
                     newCreature.configIndex = pointIndex;
                     newCreature.variantIndex = variantIndex;
-                    // Name: G{gen}_C{config+1}_V{variant+1} (config+1 because 0 is defending champion)
-                    newCreature.name = `G${this.generation}_C${pointIndex + 1}_V${variantIndex + 1}`;
+                    // Use last DNA segment as name - unique per evolutionary step
+                    newCreature.name = newCreature.getLastDNASegment();
                     newCreature.parentName = parentName;
                     newCreature.isDefendingChampion = false;  // Explicitly mark as NOT defending champion
-                    this.population.push(newCreature);
                     
-                    // Log first variant of each config for debugging
-                    if (variantIndex === 0) {
-                        console.log(`  Config ${pointIndex + 1}: Added ${blocksAdded} block(s), starting at parent block ${point.parentIndex}, face ${point.face} -> ${newCreature.blocks.length} blocks total`);
+                    // Check DNA uniqueness - only add if this is a new configuration
+                    if (this.tryRegisterCreature(newCreature)) {
+                        this.population.push(newCreature);
+                        
+                        // Log first variant of each config for debugging
+                        if (variantIndex === 0) {
+                            console.log(`  Config ${pointIndex + 1}: Added ${blocksAdded} block(s), starting at parent block ${point.parentIndex}, face ${point.face} -> ${newCreature.blocks.length} blocks total`);
+                        }
+                    } else {
+                        // This DNA segment was already tried - skip to avoid wasting computation
+                        console.log(`  [DNA] Skipping duplicate: ${newCreature.name} (config ${pointIndex + 1}, variant ${variantIndex + 1})`);
                     }
                 } else {
                     console.warn(`Failed to add any blocks at point ${pointIndex}, variant ${variantIndex}`);
@@ -1937,10 +2073,16 @@ class EvolutionManager {
                             retryCreature.seed = championCreature.seed + '_gen' + this.generation + '_p' + randomPointIndex + '_v' + variantIndex + '_r';
                             retryCreature.configIndex = randomPointIndex;
                             retryCreature.variantIndex = variantIndex;
-                            retryCreature.name = `G${this.generation}_C${randomPointIndex + 1}_V${variantIndex + 1}`;
+                            // Use last DNA segment as name - unique per evolutionary step
+                            retryCreature.name = retryCreature.getLastDNASegment();
                             retryCreature.parentName = parentName;
-                            this.population.push(retryCreature);
-                            break;
+                            
+                            // Check DNA uniqueness before adding
+                            if (this.tryRegisterCreature(retryCreature)) {
+                                this.population.push(retryCreature);
+                                break;
+                            }
+                            // If duplicate, continue trying
                         }
                     }
                 }
@@ -2435,7 +2577,7 @@ class EvolutionManager {
         const serializedTree = this.evolutionTree.map(node => {
             return {
                 id: node.id,
-                name: node.name,
+                name: node.name,  // Full DNA segment
                 generation: node.generation,
                 fitness: node.fitness,
                 fitnessMode: node.fitnessMode,
@@ -2445,8 +2587,13 @@ class EvolutionManager {
                 tilesLit: node.tilesLit,
                 jumpHeight: node.jumpHeight,
                 parentId: node.parentId,
+                parentName: node.parentName || null,
                 status: node.status,
                 children: node.children ? [...node.children] : [],
+                // Species tracking
+                speciesId: node.speciesId || null,
+                configIndex: node.configIndex,
+                variantIndex: node.variantIndex,
                 // Sensor/special block tracking
                 sensors: node.sensors ? [...node.sensors] : [],
                 lastAddedSensor: node.lastAddedSensor || null,
@@ -2516,7 +2663,10 @@ class EvolutionManager {
             targetDistance: this.targetDistance,
             targetHeight: this.targetHeight,
             targetTilesLit: this.targetTilesLit,
-            targetJumpHeight: this.targetJumpHeight
+            targetJumpHeight: this.targetJumpHeight,
+            
+            // DNA tracking (prevents re-exploring identical paths)
+            triedDNASegments: Array.from(this.triedDNASegments.entries())
         };
         
         console.log(`[SAVE] State exported: Gen ${this.generation}, ${this.population.length} creatures, ${this.evolutionTree.length} tree nodes`);
@@ -2581,7 +2731,7 @@ class EvolutionManager {
             // Restore evolution tree (with creature clones)
             this.evolutionTree = state.evolutionTree.map(node => ({
                 id: node.id,
-                name: node.name,
+                name: node.name,  // Full DNA segment
                 generation: node.generation,
                 fitness: node.fitness,
                 fitnessMode: node.fitnessMode,
@@ -2591,8 +2741,13 @@ class EvolutionManager {
                 tilesLit: node.tilesLit,
                 jumpHeight: node.jumpHeight,
                 parentId: node.parentId,
+                parentName: node.parentName || null,
                 status: node.status,
                 children: node.children ? [...node.children] : [],
+                // Species tracking
+                speciesId: node.speciesId || null,
+                configIndex: node.configIndex,
+                variantIndex: node.variantIndex,
                 // Sensor/special block tracking
                 sensors: node.sensors ? [...node.sensors] : [],
                 lastAddedSensor: node.lastAddedSensor || null,
@@ -2617,10 +2772,24 @@ class EvolutionManager {
             this.targetTilesLit = state.targetTilesLit;
             this.targetJumpHeight = state.targetJumpHeight;
             
+            // Restore DNA tracking (prevents re-exploring identical paths)
+            if (state.triedDNASegments && Array.isArray(state.triedDNASegments)) {
+                this.triedDNASegments = new Map(state.triedDNASegments);
+            } else {
+                // Rebuild from evolution tree if not saved (backward compatibility)
+                this.triedDNASegments = new Map();
+                for (const node of this.evolutionTree) {
+                    if (node.name) {
+                        this.triedDNASegments.set(node.name, node.generation);
+                    }
+                }
+            }
+            
             console.log(`[LOAD] State imported successfully!`);
             console.log(`       Generation: ${this.generation}`);
             console.log(`       Population: ${this.population.length} creatures`);
             console.log(`       Tree nodes: ${this.evolutionTree.length}`);
+            console.log(`       DNA segments tracked: ${this.triedDNASegments.size}`);
             console.log(`       Champion: ${this.champion ? this.champion.name : 'none'}`);
             console.log(`       Saved at: ${state.savedAt}`);
             

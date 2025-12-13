@@ -103,12 +103,30 @@ class Application {
         // Show mode-specific score breakdown
         this.updateModeScoreDisplay(creature, activeMode);
         
-        // Config type
+        // Config type - show DNA segment info (Position/Side and Variation)
         let configInfo = '-';
         if (creature.configIndex === -1 || creature.isDefendingChampion) {
             configInfo = '\u{1F451} Defending Champion';  // Crown emoji
-        } else if (creature.configIndex !== undefined) {
-            configInfo = `Position ${creature.configIndex + 1}, Variant ${(creature.variantIndex || 0) + 1}`;
+        } else if (creature.dna || creature.blocks) {
+            // Parse the last DNA segment to get Side and Variation values
+            let position = '?';
+            let variation = '?';
+            
+            if (creature.dna) {
+                const parts = creature.dna.split('-');
+                if (parts.length > 1) {
+                    // Parse the last block descriptor
+                    const lastSegment = parts[parts.length - 1];
+                    // Format: 01B00S1V2AC34M56X00 - extract S and V values
+                    const match = lastSegment.match(/S(\d)V([0-9A-Fa-f]{2})/);
+                    if (match) {
+                        position = match[1];
+                        // Convert hex variation to decimal for readability
+                        variation = parseInt(match[2], 16);
+                    }
+                }
+            }
+            configInfo = `Position ${position}, Variant ${variation}`;
         }
         document.getElementById('sel-config').textContent = configInfo;
         
@@ -160,7 +178,9 @@ class Application {
                 'velocity': 'Vel',
                 'ground': 'Gnd',
                 'rhythm': 'Rhy',
-                'tilt': 'Tilt'
+                'tilt': 'Tilt',
+                'compass': 'Cmp',
+                'tracking': 'Trk'
             };
             return abbrevMap[sensor.type] || sensor.type.substring(0, 3);
         });
@@ -176,7 +196,9 @@ class Application {
                 'velocity': 'Vel',
                 'ground': 'Gnd',
                 'rhythm': 'Rhy',
-                'tilt': 'Tilt'
+                'tilt': 'Tilt',
+                'compass': 'Cmp',
+                'tracking': 'Trk'
             };
             sensorAddedType.textContent = abbrevMap[creature.lastAddedSensor] || creature.lastAddedSensor;
         } else {
@@ -551,7 +573,7 @@ class Application {
         });
         
         // Per-sensor mode dropdowns - each sensor can be Off/Start/Evolve
-        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt', 'compass', 'tracking'];
         for (const type of sensorTypes) {
             const selectEl = document.getElementById(`sensor-${type}`);
             if (selectEl) {
@@ -570,7 +592,7 @@ class Application {
         // Initialize sensor modes from HTML dropdown defaults
         // This ensures SensorConfig matches the HTML even before Start is clicked
         if (typeof SensorConfig !== 'undefined') {
-            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt', 'compass', 'tracking'];
             for (const type of sensorTypes) {
                 const selectEl = document.getElementById(`sensor-${type}`);
                 if (selectEl) {
@@ -604,7 +626,7 @@ class Application {
         if (!descEl) return;
         
         // Read mode from each sensor dropdown
-        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt', 'compass', 'tracking'];
         let startCount = 0;
         let evolveCount = 0;
         
@@ -684,7 +706,7 @@ class Application {
         
         // Configure sensor settings from per-sensor dropdowns
         if (typeof SensorConfig !== 'undefined') {
-            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+            const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt', 'compass', 'tracking'];
             for (const type of sensorTypes) {
                 const selectEl = document.getElementById(`sensor-${type}`);
                 if (selectEl) {
@@ -737,7 +759,7 @@ class Application {
         document.getElementById('round-duration-input').disabled = true;
         
         // Disable sensor dropdowns during evolution
-        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt'];
+        const sensorTypes = ['gravity', 'light', 'velocity', 'ground', 'rhythm', 'tilt', 'compass', 'tracking'];
         for (const type of sensorTypes) {
             const selectEl = document.getElementById(`sensor-${type}`);
             if (selectEl) selectEl.disabled = true;
@@ -801,23 +823,49 @@ class Application {
             console.log(`   (This is the defending champion - no new block added)`);
         }
         
-        // Start celebration! Losers explode, winner gets spotlight
-        this.simulation.startCelebration(bestCreature, () => {
-            // This callback fires after 5 second celebration
-            
-            // Report to evolution manager
-            this.evolution.onCreatureEvaluated(bestCreature, bestCreature.maxDistance, bestCreature.maxHeight);
-            
-            if (!this.evolution.population || this.evolution.population.length === 0) {
-                this.isEvaluating = false;
+        // Check if this generation will make progress or hit a dead end
+        const progressCheck = this.evolution.willMakeProgress(bestCreature, activeMode);
+        
+        // Choose animation based on whether progress will be made
+        if (progressCheck.willProgress) {
+            // Progress! Start celebration - winner gets spotlight, losers explode
+            console.log(`   -> PROGRESS: Starting celebration sequence`);
+            this.simulation.startCelebration(bestCreature, () => {
+                // This callback fires after 5 second celebration
+                
+                // Report to evolution manager
+                this.evolution.onCreatureEvaluated(bestCreature, bestCreature.maxDistance, bestCreature.maxHeight);
+                
+                if (!this.evolution.population || this.evolution.population.length === 0) {
+                    this.isEvaluating = false;
+                    this.isTransitioning = false;
+                    return;
+                }
+                
+                // Start next generation
+                this.evaluateGeneration();
                 this.isTransitioning = false;
-                return;
-            }
-            
-            // Start next generation
-            this.evaluateGeneration();
-            this.isTransitioning = false;
-        });
+            });
+        } else {
+            // Dead end! Start death sequence instead
+            console.log(`   -> DEAD END: Starting death sequence (fitness ${progressCheck.bestFitness.toFixed(2)} < target ${progressCheck.targetFitness.toFixed(2)})`);
+            this.simulation.startDeathSequence(bestCreature, () => {
+                // This callback fires after death sequence
+                
+                // Report to evolution manager (will handle backtracking)
+                this.evolution.onCreatureEvaluated(bestCreature, bestCreature.maxDistance, bestCreature.maxHeight);
+                
+                if (!this.evolution.population || this.evolution.population.length === 0) {
+                    this.isEvaluating = false;
+                    this.isTransitioning = false;
+                    return;
+                }
+                
+                // Start next generation (evolution manager may have backtracked)
+                this.evaluateGeneration();
+                this.isTransitioning = false;
+            });
+        }
     }
     
     // =========================================================================
@@ -1824,7 +1872,6 @@ class Application {
         }
         
         if (bestCreature) {
-            document.getElementById('block-count').textContent = bestCreature.blocks.length;
             document.getElementById('current-distance').textContent = bestCreature.maxDistance.toFixed(2) + 'm';
             document.getElementById('current-height').textContent = bestCreature.maxHeight.toFixed(2) + 'm';
         }
@@ -1884,9 +1931,10 @@ class Application {
             }
         }
         
-        // Champion info
+        // Champion info - shows the defending champion from previous generation
         const champion = this.evolution.getChampion();
         if (champion) {
+            document.getElementById('block-count').textContent = champion.blocks.length;
             document.getElementById('champ-distance').textContent = champion.maxDistance.toFixed(2) + 'm';
             document.getElementById('champ-height').textContent = champion.maxHeight.toFixed(2) + 'm';
             document.getElementById('champ-jump').textContent = (champion.maxJumpHeight || 0).toFixed(2) + 'm';

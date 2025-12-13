@@ -28,8 +28,8 @@ class EvolutionTreeRenderer {
         this.displayMode = 'champions';
         
         // Layout settings
-        this.nodeWidth = 160;       // Width of each node box (wider for more metrics)
-        this.nodeHeight = 72;       // Height of each node box (taller for more lines)
+        this.nodeWidth = 160;       // Width of each node box
+        this.nodeHeight = 82;       // Height of each node box (room for all content + badges)
         this.horizontalSpacing = 50; // Space between generations (columns)
         this.verticalSpacing = 16;   // Minimum space between nodes in same generation
         this.padding = 40;           // Canvas edge padding
@@ -144,20 +144,43 @@ class EvolutionTreeRenderer {
         let filteredNodes;
         
         if (this.displayMode === 'species') {
-            // Species mode: show best creature per species per generation
-            const generationSpeciesMap = new Map();
+            // Species mode: show all different configurations tried per generation
+            // Use configIndex as primary key since it distinguishes different block attachments
+            // within the same generation. Fall back to speciesId or node.id if configIndex not set.
+            const generationConfigMap = new Map();
+            
+            // Debug: count nodes per generation
+            const genCounts = {};
+            const configsPerGen = {};
             
             for (const node of this.allNodes) {
-                const speciesKey = node.speciesId || node.configIndex || node.id;
-                const key = `${node.generation}_${speciesKey}`;
+                genCounts[node.generation] = (genCounts[node.generation] || 0) + 1;
                 
-                const existing = generationSpeciesMap.get(key);
+                // Use configIndex to differentiate configs within a generation
+                // Check explicitly for null/undefined since 0 is a valid configIndex
+                const configKey = node.configIndex !== null && node.configIndex !== undefined
+                    ? `cfg${node.configIndex}`  // Prefix to ensure string comparison
+                    : (node.speciesId || `id${node.id}`);
+                const key = `${node.generation}_${configKey}`;
+                
+                // Track unique configs per generation
+                if (!configsPerGen[node.generation]) configsPerGen[node.generation] = new Set();
+                configsPerGen[node.generation].add(configKey);
+                
+                const existing = generationConfigMap.get(key);
                 if (!existing || (node.fitness || 0) > (existing.fitness || 0)) {
-                    generationSpeciesMap.set(key, node);
+                    generationConfigMap.set(key, node);
                 }
             }
             
-            filteredNodes = Array.from(generationSpeciesMap.values());
+            filteredNodes = Array.from(generationConfigMap.values());
+            
+            // Debug output
+            console.log(`[SPECIES VIEW] Total nodes: ${this.allNodes.length}`);
+            console.log(`[SPECIES VIEW] Nodes per generation:`, genCounts);
+            console.log(`[SPECIES VIEW] Unique configs per generation:`, 
+                Object.fromEntries(Object.entries(configsPerGen).map(([g, s]) => [g, s.size])));
+            console.log(`[SPECIES VIEW] After filtering: ${filteredNodes.length} nodes`);
         } else {
             // Champions mode (default): show just the winning lineage (including completed lines)
             const championsOnly = ['champion', 'backtrack_source', 'complete'];
@@ -169,12 +192,16 @@ class EvolutionTreeRenderer {
         // we add back the parents that are part of a continuing genetic line
         this.nodes = this.includeAncestors(filteredNodes);
         
-        // Sort by generation then by species for consistent ordering
+        // Sort by generation then by config for consistent ordering
         this.nodes.sort((a, b) => {
             if (a.generation !== b.generation) return a.generation - b.generation;
-            const aSpecies = a.speciesId || a.configIndex || 0;
-            const bSpecies = b.speciesId || b.configIndex || 0;
-            return aSpecies - bSpecies;
+            // Handle configIndex comparison - null/undefined should sort last
+            const aHasConfig = a.configIndex !== null && a.configIndex !== undefined;
+            const bHasConfig = b.configIndex !== null && b.configIndex !== undefined;
+            if (aHasConfig && bHasConfig) return a.configIndex - b.configIndex;
+            if (aHasConfig) return -1;
+            if (bHasConfig) return 1;
+            return 0;
         });
     }
     
@@ -850,109 +877,117 @@ class EvolutionTreeRenderer {
         ctx.fill();
         ctx.stroke();
         
-        // Draw status icon
+        // === ROW 1: Status icon, Generation, Block count ===
+        const row1Y = y + 12;
+        
+        // Status icon (left)
         const icon = this.getStatusIcon(node.status);
-        ctx.font = '14px serif';
+        ctx.font = '11px serif';
         ctx.fillStyle = borderColor;
         ctx.textAlign = 'left';
-        ctx.fillText(icon, x + 6, y + 16);
+        ctx.fillText(icon, x + 4, row1Y);
         
-        // Draw creature name
-        ctx.font = `bold 11px ${this.fontFamily}`;
-        ctx.fillStyle = this.colors.text;
-        ctx.fillText(node.name || 'Unknown', x + 24, y + 16);
+        // Generation (after icon)
+        ctx.font = `bold 9px ${this.fontFamily}`;
+        ctx.fillStyle = '#ffd700';  // Gold
+        ctx.fillText(`Gen ${node.generation}`, x + 20, row1Y);
         
-        // Draw species indicator if available (small badge showing C1, C2, etc.)
-        if (node.configIndex !== null && node.configIndex !== undefined) {
-            // Species badge background
-            ctx.fillStyle = 'rgba(167, 139, 250, 0.3)';  // Purple tinted
-            ctx.fillRect(x + 6, y + this.nodeHeight - 14, 22, 12);
-            ctx.font = `bold 8px ${this.fontFamily}`;
-            ctx.fillStyle = '#a78bfa';  // Purple text
-            ctx.textAlign = 'center';
-            ctx.fillText(`C${node.configIndex + 1}`, x + 17, y + this.nodeHeight - 5);
-        }
-        
-        // Draw generation
-        ctx.font = `10px ${this.fontFamily}`;
-        ctx.fillStyle = '#ffd700';
+        // Block count (right aligned)
+        ctx.fillStyle = '#64ffda';
         ctx.textAlign = 'right';
-        ctx.fillText(`Gen ${node.generation}`, x + this.nodeWidth - 6, y + 16);
+        ctx.fillText(`${node.blocks} blk`, x + this.nodeWidth - 4, row1Y);
         
-        // Draw stats line 1: blocks and fitness
-        ctx.font = `9px ${this.fontFamily}`;
+        // === ROW 2: Full DNA segment ===
+        const row2Y = y + 24;
+        ctx.font = `bold 8px ${this.fontFamily}`;
+        ctx.fillStyle = this.colors.text;
+        ctx.textAlign = 'left';
+        ctx.fillText(node.name || 'Unknown', x + 4, row2Y);
+        
+        // === ROW 3: Fitness value and mode indicator ===
+        const row3Y = y + 36;
+        ctx.font = `8px ${this.fontFamily}`;
         ctx.fillStyle = this.colors.textSecondary;
         ctx.textAlign = 'left';
-        const statsLine = `${node.blocks} blk - Fit: ${node.fitness.toFixed(1)}`;
-        ctx.fillText(statsLine, x + 6, y + 30);
+        ctx.fillText(`Fit: ${node.fitness.toFixed(1)}`, x + 4, row3Y);
         
-        // Draw stats line 2: distance and height
-        const metricsLine1 = `Dist: ${node.distance.toFixed(1)}m - H: ${node.height.toFixed(1)}m`;
-        ctx.fillText(metricsLine1, x + 6, y + 42);
+        // Show fitness mode used (abbreviated)
+        if (node.fitnessMode) {
+            const modeAbbrev = {
+                'distance': 'Dist', 'efficiency': 'Eff', 'jump': 'Jump',
+                'area': 'Area', 'outcast': 'Out', 'spartan': 'Spar'
+            };
+            ctx.fillStyle = '#fbbf24';  // Yellow/amber for mode
+            ctx.textAlign = 'right';
+            ctx.fillText(`[${modeAbbrev[node.fitnessMode] || node.fitnessMode}]`, x + this.nodeWidth - 4, row3Y);
+        }
         
-        // Draw stats line 3: jump and tiles
+        // === ROW 4: Distance and Height ===
+        const row4Y = y + 46;
+        ctx.fillStyle = this.colors.textSecondary;
+        ctx.textAlign = 'left';
+        ctx.fillText(`D: ${node.distance.toFixed(1)}m  H: ${node.height.toFixed(1)}m`, x + 4, row4Y);
+        
+        // === ROW 5: Jump, Tiles, and Efficiency ===
+        const row5Y = y + 57;
         const jump = node.jumpHeight || 0;
         const tiles = node.tilesLit || 0;
-        const metricsLine2 = `[J] Jump: ${jump.toFixed(1)}m - Tiles: ${tiles}`;
-        ctx.fillText(metricsLine2, x + 6, y + 54);
+        ctx.fillText(`J: ${jump.toFixed(1)}m  T: ${tiles}`, x + 4, row5Y);
         
-        // Draw stats line 4: efficiency (distance per tile)
+        // Efficiency on the right
         const efficiency = tiles > 0 ? (node.distance / tiles) : 0;
         ctx.fillStyle = '#64ffda';
-        ctx.fillText(`Eff: ${efficiency.toFixed(3)} (d/t)`, x + 6, y + 66);
+        ctx.textAlign = 'right';
+        ctx.fillText(`Eff: ${efficiency.toFixed(2)}`, x + this.nodeWidth - 4, row5Y);
         
-        // Draw sensor indicator if creature has sensors (compact badge)
-        if (node.sensors && node.sensors.length > 0) {
-            const sensorCount = node.sensors.length;
-            const badgeX = x + 90;
-            const badgeY = y + 60;
-            
-            // Compact sensor count badge
-            ctx.fillStyle = 'rgba(170, 68, 255, 0.4)';
-            const badgeWidth = node.lastAddedSensor ? 42 : 22;
-            ctx.fillRect(badgeX, badgeY, badgeWidth, 10);
+        // === BOTTOM ROW: Badges (organized left/center/right) ===
+        const badgeY = y + this.nodeHeight - 4;  // Text baseline for badges
+        const badgeBgY = y + this.nodeHeight - 12;  // Background top
+        
+        // LEFT: Config badge
+        if (node.configIndex !== null && node.configIndex !== undefined && node.configIndex >= 0) {
+            ctx.fillStyle = 'rgba(167, 139, 250, 0.3)';
+            ctx.fillRect(x + 4, badgeBgY, 26, 10);
             ctx.font = `bold 7px ${this.fontFamily}`;
-            ctx.fillStyle = '#aa44ff';
-            ctx.textAlign = 'left';
-            ctx.fillText(`S:${sensorCount}`, badgeX + 2, badgeY + 7);
-            
-            // If a sensor was just added, show "+1" indicator
-            if (node.lastAddedSensor) {
-                ctx.fillStyle = '#4ade80';
-                ctx.fillText('+1', badgeX + 24, badgeY + 7);
-            }
+            ctx.fillStyle = '#a78bfa';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Cfg${node.configIndex + 1}`, x + 17, badgeY);
         }
         
-        // Draw "CURRENT" badge if this is the current branch
+        // CENTER: Status badge (CURRENT, MAX BLOCKS, or dead end mode)
         if (isCurrent) {
             ctx.fillStyle = 'rgba(100, 255, 218, 0.2)';
-            ctx.fillRect(x + this.nodeWidth - 50, y + this.nodeHeight - 14, 46, 12);
-            ctx.font = `bold 8px ${this.fontFamily}`;
+            ctx.fillRect(x + 55, badgeBgY, 50, 10);
+            ctx.font = `bold 7px ${this.fontFamily}`;
             ctx.fillStyle = this.colors.current;
             ctx.textAlign = 'center';
-            ctx.fillText('CURRENT', x + this.nodeWidth - 27, y + this.nodeHeight - 5);
-        }
-        
-        // For dead ends, show the fitness mode they failed in
-        if (node.status === 'dead_end' && node.fitnessMode) {
-            ctx.fillStyle = 'rgba(248, 113, 113, 0.2)';  // Red tinted background
-            ctx.fillRect(x + this.nodeWidth - 70, y + this.nodeHeight - 14, 66, 12);
-            ctx.font = `bold 7px ${this.fontFamily}`;
-            ctx.fillStyle = this.colors.dead_end;
-            ctx.textAlign = 'center';
-            // Show abbreviated mode name
-            const modeLabel = this.getModeShortName(node.fitnessMode);
-            ctx.fillText(modeLabel, x + this.nodeWidth - 37, y + this.nodeHeight - 5);
-        }
-        
-        // For completed lines, show MAX BLOCKS indicator
-        if (node.status === 'complete') {
-            ctx.fillStyle = 'rgba(34, 211, 238, 0.2)';  // Cyan tinted background
-            ctx.fillRect(x + this.nodeWidth - 70, y + this.nodeHeight - 14, 66, 12);
+            ctx.fillText('CURRENT', x + 80, badgeY);
+        } else if (node.status === 'complete') {
+            ctx.fillStyle = 'rgba(34, 211, 238, 0.2)';
+            ctx.fillRect(x + 55, badgeBgY, 50, 10);
             ctx.font = `bold 7px ${this.fontFamily}`;
             ctx.fillStyle = this.colors.complete;
             ctx.textAlign = 'center';
-            ctx.fillText('MAX BLOCKS', x + this.nodeWidth - 37, y + this.nodeHeight - 5);
+            ctx.fillText('MAX BLOCKS', x + 80, badgeY);
+        } else if (node.status === 'dead_end' && node.fitnessMode) {
+            ctx.fillStyle = 'rgba(248, 113, 113, 0.2)';
+            ctx.fillRect(x + 55, badgeBgY, 50, 10);
+            ctx.font = `bold 7px ${this.fontFamily}`;
+            ctx.fillStyle = this.colors.dead_end;
+            ctx.textAlign = 'center';
+            const modeLabel = this.getModeShortName(node.fitnessMode);
+            ctx.fillText(modeLabel, x + 80, badgeY);
+        }
+        
+        // RIGHT: Sensor badge
+        if (node.sensors && node.sensors.length > 0) {
+            const sensorCount = node.sensors.length;
+            ctx.fillStyle = 'rgba(170, 68, 255, 0.4)';
+            ctx.fillRect(x + this.nodeWidth - 28, badgeBgY, 24, 10);
+            ctx.font = `bold 7px ${this.fontFamily}`;
+            ctx.fillStyle = '#aa44ff';
+            ctx.textAlign = 'center';
+            ctx.fillText(`S:${sensorCount}`, x + this.nodeWidth - 16, badgeY);
         }
     }
     
@@ -1078,10 +1113,11 @@ class EvolutionTreeRenderer {
         const tooltipWidth = 220;
         // Dynamic height based on content
         let extraHeight = 0;
+        
         if (node.fitnessMode) extraHeight += 15;
         if (node.rank !== undefined) extraHeight += 15;
-        // Add space for species info if available
-        if (node.speciesId !== null && node.speciesId !== undefined) extraHeight += 15;
+        // Add space for config info if available
+        if (node.configIndex !== null && node.configIndex !== undefined && node.configIndex >= 0) extraHeight += 15;
         // Add space for sensor info if creature has sensors (now more compact)
         if (node.sensors && node.sensors.length > 0) {
             extraHeight += 15;  // One line for sensors
@@ -1121,11 +1157,11 @@ class EvolutionTreeRenderer {
         let lineY = y + padding + 12;
         const lineSpacing = 15;
         
-        // Name
-        ctx.font = `bold 13px ${this.fontFamily}`;
+        // Full DNA segment as the creature's identifier
+        ctx.font = `bold 11px ${this.fontFamily}`;
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'left';
-        ctx.fillText(`${this.getStatusIcon(node.status)} ${node.name}`, x + padding, lineY);
+        ctx.fillText(`${this.getStatusIcon(node.status)} ${node.name || 'Unknown'}`, x + padding, lineY);
         lineY += lineSpacing;
         
         // Status
@@ -1135,14 +1171,6 @@ class EvolutionTreeRenderer {
         ctx.fillText(`Status: ${statusText}`, x + padding, lineY);
         lineY += lineSpacing;
         
-        // For dead ends, show the fitness mode they were judged by
-        if (node.status === 'dead_end' && node.fitnessMode) {
-            ctx.fillStyle = this.colors.dead_end;
-            const modeName = this.getModeLongName(node.fitnessMode);
-            ctx.fillText(`Failed in: ${modeName} mode`, x + padding, lineY);
-            lineY += lineSpacing;
-        }
-        
         // Show rank if available
         if (node.rank !== undefined) {
             ctx.fillStyle = this.colors.textSecondary;
@@ -1150,17 +1178,30 @@ class EvolutionTreeRenderer {
             lineY += lineSpacing;
         }
         
+        // Show fitness mode used to judge this creature (for ALL creatures, not just dead ends)
+        if (node.fitnessMode) {
+            const modeName = this.getModeLongName(node.fitnessMode);
+            // Color based on status - red for dead ends, yellow/amber for others
+            if (node.status === 'dead_end') {
+                ctx.fillStyle = this.colors.dead_end;
+                ctx.fillText(`Judged by: ${modeName} (failed)`, x + padding, lineY);
+            } else {
+                ctx.fillStyle = '#fbbf24';  // Amber for mode indicator
+                ctx.fillText(`Judged by: ${modeName}`, x + padding, lineY);
+            }
+            lineY += lineSpacing;
+        }
+        
         // Basic stats
         ctx.fillStyle = '#aaaaaa';
-        ctx.fillText(`Generation: ${node.generation}  -  Blocks: ${node.blocks}`, x + padding, lineY);
+        ctx.fillText(`Generation: ${node.generation}  |  Blocks: ${node.blocks}`, x + padding, lineY);
         lineY += lineSpacing;
         
-        // Species info if available
-        if (node.speciesId !== null && node.speciesId !== undefined) {
-            ctx.fillStyle = '#a78bfa';  // Purple for species
-            const speciesLabel = node.configIndex !== null ? `Species C${node.configIndex + 1}` : 'Species';
-            const variantLabel = node.variantIndex !== null ? `V${node.variantIndex + 1}` : '';
-            ctx.fillText(`${speciesLabel} ${variantLabel} (seed: ${node.speciesId})`, x + padding, lineY);
+        // Config info (attachment point used) - clearer label
+        if (node.configIndex !== null && node.configIndex !== undefined && node.configIndex >= 0) {
+            ctx.fillStyle = '#a78bfa';  // Purple for config
+            const variantLabel = node.variantIndex !== null ? `, Variant ${node.variantIndex + 1}` : '';
+            ctx.fillText(`Config ${node.configIndex + 1}${variantLabel}`, x + padding, lineY);
             lineY += lineSpacing;
         }
         
@@ -1170,7 +1211,8 @@ class EvolutionTreeRenderer {
             // Get abbreviated names for sensors
             const abbrevMap = {
                 'gravity': 'Grv', 'light': 'Lgt', 'velocity': 'Vel',
-                'ground': 'Gnd', 'rhythm': 'Rhy', 'tilt': 'Tlt'
+                'ground': 'Gnd', 'rhythm': 'Rhy', 'tilt': 'Tlt',
+                'compass': 'Cmp', 'tracking': 'Trk'
             };
             const sensorAbbrevs = node.sensors.map(type => abbrevMap[type] || type);
             ctx.fillText(`Sensors: ${sensorAbbrevs.join(', ')}`, x + padding, lineY);
